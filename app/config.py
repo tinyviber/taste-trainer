@@ -1,0 +1,59 @@
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Settings:
+    workspace: Path
+    llm_base_url: str
+    llm_api_key: str
+    llm_model: str
+    llm_vision_model: str
+    api_port: int = 8421
+    a2h_url: str = "http://localhost:8420"
+    api_token: str = ""
+    ffmpeg: str = "ffmpeg"
+    ffprobe: str = "ffprobe"
+
+
+def load_settings() -> Settings:
+    ws = os.environ.get("WORKSPACE_DIR", "").strip()
+    if not ws:
+        raise SystemExit("WORKSPACE_DIR is required (path to the data workspace)")
+    base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
+    key = os.environ.get("LLM_API_KEY", "")
+    if not key:
+        raise SystemExit("LLM_API_KEY is required")
+    model = os.environ.get("LLM_MODEL", "gpt-4o")
+    return Settings(
+        workspace=Path(ws).expanduser().resolve(),
+        llm_base_url=base,
+        llm_api_key=key,
+        llm_model=model,
+        llm_vision_model=os.environ.get("LLM_VISION_MODEL", model),
+        api_port=int(os.environ.get("API_PORT", "8421")),
+        a2h_url=os.environ.get("A2H_URL", "http://localhost:8420"),
+        api_token=os.environ.get("API_TOKEN", ""),
+        ffmpeg=os.environ.get("FFMPEG_BIN", "ffmpeg"),
+        ffprobe=os.environ.get("FFPROBE_BIN", "ffprobe"),
+    )
+
+
+# 工作区内的固定子路径
+def ws_dirs(ws: Path) -> dict:
+    return {
+        "videos": ws / "videos",
+        "inbox": ws / "videos" / "inbox",
+        "runs": ws / "runs",
+        "analyses": ws / "analyses",
+        "exercises": ws / "exercises",
+        "template": ws / "exercises" / "_template",
+        "a2h": ws / ".a2h",
+        "runs_meta": ws / ".a2h" / "runs",
+        "index": ws / "exercises" / "INDEX.md",
+        "rubric": ws / "RUBRIC.md",
+        "pool": ws / "PROMPT_POOL.md",
+        "principles": ws / "analyses" / "PRINCIPLES.md",
+        "manifest": ws / ".a2h" / "manifest.json",
+    }

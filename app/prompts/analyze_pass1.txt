@@ -1,0 +1,31 @@
+你在分析一个视频的分镜策略（第一遍：通读）。
+图片是按时间顺序排列的拼图（contact sheets），每张内含按顺序排布的
+若干帧，帧文件名 f_NNN.jpg 中 NNN ≈ 该帧秒数+1。
+
+任务：
+1. 看懂这个视频在讲什么
+2. 标出关键的注意力调度时刻（视角切换、镜子/屏幕内的画面、
+   表情特写、仪表特写、外部机位等）
+3. 选出值得作为证据保存的关键帧 id
+
+只输出一个 JSON 对象（不要输出其他任何文字）：
+{
+  "title_en": "英文短 slug 风格标题，如 overtake-highway",
+  "story": "两三句话概括剧情",
+  "acts": [
+    {"range": "00:00–00:10", "summary": "这一段发生了什么+镜头策略"}
+  ],
+  "key_moments": [
+    {"time": "约00:11", "frame": "f_012", "why": "这个镜头的调度作用"}
+  ],
+  "keyframes": ["f_001", "f_012", "..."],
+  "has_dialogue": false,
+  "stats": {
+    "shot_count": 35,
+    "pov_holders": 3,
+    "external_shots": 4,
+    "pov_ratio": "约70%"
+  }
+}
+
+keyframes 选 10-16 个最能论证调度策略的帧 id（用 key_moments 里出现的）。

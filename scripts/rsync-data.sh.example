@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# 把本地数据工作区同步到 VPS（数据不进 git，靠这个脚本搬运）。
+# 用法：VPS=user@host ./rsync-data.sh
+set -euo pipefail
+
+VPS="${VPS:?set VPS=user@host}"
+LOCAL_WS="/Users/wj/Downloads/视频脚本分析"
+REMOTE_WS="/srv/video-trainer/workspace"
+
+# 只同步数据，排除 service/ 代码（代码走 git 部署）和可再生的大文件
+rsync -avz --progress \
+  --exclude 'service/' \
+  --exclude 'runs/' \
+  --exclude 'videos/inbox/' \
+  --exclude '.DS_Store' \
+  "$LOCAL_WS/" "$VPS:$REMOTE_WS/"
+
+echo "完成。videos/ analyses/ exercises/ *.md .a2h/ 已同步；runs/ 可在 VPS 上重新生成。"

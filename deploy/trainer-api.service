@@ -1,0 +1,14 @@
+[Unit]
+Description=video-script-trainer API
+After=network.target
+
+[Service]
+WorkingDirectory=/srv/video-trainer/service
+EnvironmentFile=/srv/video-trainer/service/.env
+ExecStart=/srv/video-trainer/service/.venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8421
+Restart=on-failure
+RestartSec=3
+# User=videotrainer
+
+[Install]
+WantedBy=multi-user.target
