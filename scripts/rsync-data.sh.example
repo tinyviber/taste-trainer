@@ -5,7 +5,7 @@ set -euo pipefail
 
 VPS="${VPS:?set VPS=user@host}"
 LOCAL_WS="/Users/wj/Downloads/视频脚本分析"
-REMOTE_WS="/srv/video-trainer/workspace"
+REMOTE_WS="/srv/video-trainer/service/workspace"
 
 # 只同步数据，排除 service/ 代码（代码走 git 部署）和可再生的大文件
 rsync -avz --progress \

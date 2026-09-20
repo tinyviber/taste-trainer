@@ -2,7 +2,7 @@
 
 Endpoints
   GET  /                          dashboard
-  GET  /api/state                 latest exercise, inbox videos, job statuses
+  GET  /api/state                 latest exercise, human-facing documents, videos, jobs
   POST /api/exercise/new?force=0  出题
   POST /api/exercise/{id}/submit  body: {"text": "..."} → 打分
   POST /api/exercise/{id}/micro-revise  body: {"text": "..."} → 展开 revision
@@ -34,6 +34,14 @@ app = FastAPI(title="视频脚本训练服务")
 JOBS: dict[str, dict] = {}
 JOB_LOCK = threading.Lock()
 ACTIVE_SCOPES: set[str] = set()
+
+EXERCISE_DOCUMENTS = {
+    "prompt": "prompt.md",
+    "submission": "submission.md",
+    "review": "review.md",
+    "micro_revision": "micro_revision.md",
+    "revision": "revision.md",
+}
 
 
 async def _auth(request: Request):
@@ -85,6 +93,16 @@ def _update_principle_and_manifest(dirs, workspace, candidate_id, action, title,
     return candidate
 
 
+def _read_exercise_documents(exercise_dir: Path | None) -> dict[str, str]:
+    """Return only the human-facing artifacts for the latest exercise."""
+    if exercise_dir is None:
+        return {key: "" for key in EXERCISE_DOCUMENTS}
+    return {
+        key: read(exercise_dir / filename)
+        for key, filename in EXERCISE_DOCUMENTS.items()
+    }
+
+
 # ------------------------------------------------------------------ api
 
 @app.get("/api/state", dependencies=[Depends(_auth)])
@@ -101,6 +119,7 @@ def state():
     exs = [{"id": m["id"], "title": m.get("title"),
             "status": m.get("status"), "score": m.get("score")}
            for _, m in ex_records]
+    latest_dir = ex_records[-1][0] if ex_records else None
     videos = []
     for sub in ("videos", "inbox"):
         p = dirs[sub] if sub == "inbox" else dirs["videos"]
@@ -119,6 +138,7 @@ def state():
     return {"latest_exercise": latest, "exercises": exs[-5:],
             "videos": videos, "jobs": JOBS,
             "submission_template": submission, "micro_focus": micro_focus,
+            "documents": _read_exercise_documents(latest_dir),
             "a2h_url": settings.a2h_url}
 
 

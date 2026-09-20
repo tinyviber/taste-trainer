@@ -10,6 +10,14 @@ export type Video = { name: string; inbox: boolean }
 
 export type Job = { status: string; detail?: string; started?: number }
 
+export type ExerciseDocuments = {
+  prompt: string
+  submission: string
+  review: string
+  micro_revision: string
+  revision: string
+}
+
 export type TrainerState = {
   latest_exercise: Exercise | null
   exercises: Exercise[]
@@ -17,6 +25,7 @@ export type TrainerState = {
   jobs: Record<string, Job>
   submission_template: string
   micro_focus: { dim?: string; original?: string; gap?: string } | null
+  documents: ExerciseDocuments
   a2h_url: string
 }
 

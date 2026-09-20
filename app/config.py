@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_WORKSPACE = PROJECT_ROOT / "workspace"
+
 
 @dataclass
 class Settings:
@@ -26,15 +29,14 @@ class Settings:
 
 def load_settings() -> Settings:
     ws = os.environ.get("WORKSPACE_DIR", "").strip()
-    if not ws:
-        raise SystemExit("WORKSPACE_DIR is required (path to the data workspace)")
+    workspace = Path(ws).expanduser().resolve() if ws else DEFAULT_WORKSPACE
     base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
     key = os.environ.get("LLM_API_KEY", "")
     if not key:
         raise SystemExit("LLM_API_KEY is required")
     model = os.environ.get("LLM_MODEL", "gpt-4o")
     return Settings(
-        workspace=Path(ws).expanduser().resolve(),
+        workspace=workspace,
         llm_base_url=base,
         llm_api_key=key,
         llm_model=model,

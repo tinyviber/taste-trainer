@@ -29,6 +29,54 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
+function A2HLink({ url }: { url?: string }) {
+  if (!url) return null
+  try {
+    const target = new URL(url, window.location.href)
+    const localHosts = new Set(['localhost', '127.0.0.1', '::1'])
+    const pointsToLocalViewer = localHosts.has(target.hostname)
+    const browserIsLocal = localHosts.has(window.location.hostname)
+    if (pointsToLocalViewer && !browserIsLocal) {
+      return <span className="muted small" title="服务器上的 A2H 仅监听本机；主流程内容已在此页面展示">A2H / optional</span>
+    }
+    return <a className="text-link" href={target.toString()} target="_blank" rel="noreferrer">Open A2H ↗</a>
+  } catch {
+    return null
+  }
+}
+
+type DocumentCardProps = {
+  eyebrow: string
+  title: string
+  content: string
+  tone?: 'prompt' | 'review' | 'revision' | 'default'
+}
+
+function DocumentCard({ eyebrow, title, content, tone = 'default' }: DocumentCardProps) {
+  const trimmed = content.trim()
+  if (!trimmed) return null
+  return <article className={`document-card document-card-${tone}`}>
+    <div className="document-card-head"><span className="eyebrow">{eyebrow}</span><span className="muted small">完整内容</span></div>
+    <h3>{title}</h3>
+    <pre className="document-body">{trimmed}</pre>
+  </article>
+}
+
+function ExerciseDocuments({ exercise, documents }: { exercise: Exercise; documents?: TrainerState['documents'] }) {
+  if (!documents) return null
+  return <section className="panel documents-panel">
+    <SectionTitle eyebrow="Read in dashboard" title="题目、提交与反馈" action={<span className="count-label">A2H optional</span>} />
+    <p className="document-intro">主流程需要的内容直接显示在这里；A2H 只负责工作区的深度浏览。</p>
+    <div className="document-list">
+      <DocumentCard eyebrow="Prompt / 题目" title={exercise.title} content={documents.prompt} tone="prompt" />
+      {exercise.status !== 'prompted' && <DocumentCard eyebrow="Submission / 我的方案" title="你的分镜方案" content={documents.submission} />}
+      <DocumentCard eyebrow="Review / 评分" title="评分与修改意见" content={documents.review} tone="review" />
+      <DocumentCard eyebrow="micro-v2 / 局部改写" title="我的局部改写" content={documents.micro_revision} />
+      <DocumentCard eyebrow="Revision / 修改版" title="完整修改版分镜" content={documents.revision} tone="revision" />
+    </div>
+  </section>
+}
+
 function Button({ children, variant = 'secondary', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' | 'danger' }) {
   return <button className={`button button-${variant}`} {...props}>{children}</button>
 }
@@ -41,6 +89,7 @@ function PracticeView() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const initializedPromptRef = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -50,13 +99,14 @@ function PracticeView() {
       ])
       setState(nextState)
       setPrinciples(nextPrinciples)
-      if (nextState.latest_exercise?.status === 'prompted' && !submission) {
+      if (nextState.latest_exercise?.status === 'prompted' && nextState.latest_exercise.id !== initializedPromptRef.current) {
         setSubmission(nextState.submission_template)
+        initializedPromptRef.current = nextState.latest_exercise.id
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '刷新失败')
     }
-  }, [submission])
+  }, [])
 
   useEffect(() => {
     void refresh()
@@ -88,7 +138,7 @@ function PracticeView() {
     <header className="mobile-header"><span className="brand-mark">Taste Trainer</span><span className="mobile-subtitle">Video → palate</span></header>
     <div className="page-head">
       <div><span className="eyebrow">Practice / today</span><h1>Train your palate<br /><em>one video at a time.</em></h1></div>
-      <div className="head-actions"><a className="text-link" href={state?.a2h_url ?? '#'} target="_blank" rel="noreferrer">Open A2H ↗</a><span className="sync-dot" /> <span className="muted">同步中</span></div>
+      <div className="head-actions"><A2HLink url={state?.a2h_url} /><span className="sync-dot" /> <span className="muted">同步中</span></div>
     </div>
 
     {error && <div className="alert">{error}<button onClick={() => setError('')}>×</button></div>}
@@ -97,6 +147,8 @@ function PracticeView() {
       <div className="hero-top"><div><span className="eyebrow">Current exercise</span><h2>{latest?.title ?? '还没有练习'}</h2><p>{latest ? 'Watch, taste, and identify the key flavor notes.' : '点击下方按钮生成第一道练习题。'}</p></div><div className="exercise-count"><strong>{state?.exercises.length ?? 0}</strong><span>EXERCISES</span></div></div>
       {latest ? <div className="exercise-meta"><StatusPill status={latest.status} score={latest.score} /><span className="meta-divider" /><span className="muted mono">{latest.id}</span></div> : <div className="empty hero-empty">你的训练记录会从这里开始。</div>}
     </section>
+
+    {latest && <ExerciseDocuments exercise={latest} documents={state?.documents} />}
 
     <div className="two-column">
       <section className="panel submission-panel">

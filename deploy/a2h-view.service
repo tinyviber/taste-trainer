@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 WorkingDirectory=/srv/video-trainer/workspace
-ExecStart=/usr/local/bin/a2h render /srv/video-trainer/workspace --watch --port 8420
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env a2h render /srv/video-trainer/workspace --watch --port 8420
 Restart=on-failure
 RestartSec=3
 User=videotrainer

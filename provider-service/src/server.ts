@@ -15,7 +15,8 @@ type StoredProvider = ProviderConfig & {
 const port = Number(process.env.PROVIDER_PORT ?? 8765)
 const allowedOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:5173'
 const apiToken = process.env.API_TOKEN ?? ''
-const workspace = process.env.WORKSPACE_DIR ?? process.cwd()
+const defaultWorkspace = resolve(import.meta.dirname, '../../workspace')
+const workspace = process.env.WORKSPACE_DIR ?? defaultWorkspace
 const configPath = resolve(process.env.PROVIDER_CONFIG_PATH ?? `${workspace}/.a2h/providers.json`)
 let writeQueue = Promise.resolve()
 

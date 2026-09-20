@@ -39,18 +39,23 @@ service/
 ## 本地开发
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # 填 WORKSPACE_DIR / LLM_* 
-uvicorn app.api:app --port 8421
-# 另一个终端：cd provider-service && npm install && npm run dev
-# 再一个终端：cd web && npm install && npm run dev
-# 另一个终端：a2h render $WORKSPACE_DIR -w -p 8420
+bash scripts/local.sh
 ```
 
-打开 http://localhost:5173 出题/提交/上传分析。评审后先完成一个 micro-v2，
-再展开 LLM 生成的完整 revision；视频分析产生的原则候选需要人工接受后才会
-进入 `analyses/PRINCIPLES.md`。
+脚本会把数据放在项目根目录的 `workspace/`（也可通过环境变量
+`WORKSPACE_DIR` 覆盖），自动准备依赖、运行测试和构建，然后启动 API、Provider
+和 React；A2H 已安装时也会一并启动。打开 http://127.0.0.1:5173 出题/提交/上传分析。
+题目全文、提交内容、评分意见、
+micro-v2 和完整 revision 都会直接显示在 React 页面；A2H 只作为可选的工作区深度
+浏览器。评审后先完成一个 micro-v2，再展开 LLM 生成的完整 revision；视频分析产生
+的原则候选需要人工接受后才会进入 `analyses/PRINCIPLES.md`。
+
+只跑检查或构建时可用：
+
+```bash
+bash scripts/local.sh test
+bash scripts/local.sh build
+```
 
 ### 前端与 provider
 
@@ -65,16 +70,18 @@ key 到 `WORKSPACE_DIR/.a2h/providers.json`（权限 0600），浏览器只收�
 模型列表。点击“检测模型”会由服务端请求 `<baseURL>/models`，勾选项会限制可用的
 `providerId:modelId`；“全部/取消全部”只修改当前 provider 的允许模型集合。
 
-生产环境先构建 `web` 和 `provider-service`，FastAPI 会提供 `web/dist`；把
+生产环境需要 Node.js 22 LTS 或更高版本（`provider-service` 的 AI SDK 7 和 Vite 7
+都依赖它）。先构建 `web` 和 `provider-service`，FastAPI 会提供 `web/dist`；把
 `deploy/nginx.conf.example` 中的 `/provider-api/` 反向代理配置加入 Nginx，
-再启用 `trainer-api`、`provider-service` 和 `a2h-view`。
+并确保 `client_max_body_size` 不小于 `.env` 的 `MAX_UPLOAD_MB`，再启用
+`trainer-api`、`provider-service` 和 `a2h-view`。
 
 ## VPS 部署
 
 ```bash
 git clone <repo> /srv/video-trainer/service
 sudo bash /srv/video-trainer/service/deploy/setup.sh
-# 配 .env → rsync 数据（scripts/rsync-data.sh.example）→ 装 systemd 单元
+# 默认 workspace 是 /srv/video-trainer/service/workspace；配 .env → rsync 数据 → 装 systemd 单元
 sudo cp deploy/*.service /etc/systemd/system/  # 改路径/用户
 sudo systemctl enable --now trainer-api provider-service a2h-view
 ```

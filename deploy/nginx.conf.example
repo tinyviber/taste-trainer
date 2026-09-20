@@ -3,6 +3,10 @@
 # / 和 /api/ 继续转到 FastAPI；/provider-api/ 转发给 AI SDK provider service。
 # provider service 自己只监听 127.0.0.1，不直接暴露 API key 管理接口。
 
+# Keep this at least as large as MAX_UPLOAD_MB in .env. Nginx defaults to 1m,
+# which would reject most videos before FastAPI can stream them to disk.
+client_max_body_size 1024m;
+
 location /provider-api/ {
     proxy_pass http://127.0.0.1:8765/;
     proxy_set_header Host $host;

@@ -7,3 +7,4 @@ web/node_modules/
 web/dist/
 provider-service/node_modules/
 provider-service/dist/
+workspace/
