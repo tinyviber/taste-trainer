@@ -1,0 +1,15 @@
+[Unit]
+Description=Taste Trainer AI SDK provider service
+After=network.target
+
+[Service]
+WorkingDirectory=/srv/video-trainer/service/provider-service
+EnvironmentFile=/srv/video-trainer/service/.env
+ExecStart=/usr/bin/node /srv/video-trainer/service/provider-service/dist/server.js
+Restart=on-failure
+RestartSec=3
+User=videotrainer
+Group=videotrainer
+
+[Install]
+WantedBy=multi-user.target

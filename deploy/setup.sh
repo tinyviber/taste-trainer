@@ -24,6 +24,13 @@ python3 -m venv "$SERVICE_DIR/.venv"
 
 # 4) 数据目录骨架
 mkdir -p "$WORKSPACE_DIR"/{videos/inbox,runs,analyses,exercises/_template,.a2h/runs}
+
+# 5) React dashboard + AI SDK provider service
+npm ci --prefix "$SERVICE_DIR/provider-service"
+npm run build --prefix "$SERVICE_DIR/provider-service"
+npm ci --prefix "$SERVICE_DIR/web"
+npm run build --prefix "$SERVICE_DIR/web"
+
 chown -R videotrainer:videotrainer "$SERVICE_DIR" "$WORKSPACE_DIR"
 
 echo ""

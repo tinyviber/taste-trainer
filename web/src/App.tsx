@@ -1,0 +1,140 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { apiFetch, jsonBody } from './api'
+import type { Exercise, Job, Principle, PrinciplesState, TrainerState, Video } from './types'
+import { ProviderManager } from './components/ProviderManager'
+
+type View = 'practice' | 'providers'
+
+function statusLabel(status: string) {
+  return ({
+    prompted: '待提交',
+    submitted: '已提交',
+    needs_micro_revision: '待 micro-v2',
+    reviewed: '已完成',
+    succeeded: '完成',
+    running: '处理中',
+    failed: '失败',
+  } as Record<string, string>)[status] ?? status
+}
+
+function StatusPill({ status, score }: { status: string; score?: number | null }) {
+  return <span className={`pill pill-${status}`}>{statusLabel(status)}{score != null ? ` · ${score}/100` : ''}</span>
+}
+
+function SectionTitle({ eyebrow, title, action }: { eyebrow: string; title: string; action?: React.ReactNode }) {
+  return <div className="section-title"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action}</div>
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div className="empty">{children}</div>
+}
+
+function Button({ children, variant = 'secondary', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' | 'danger' }) {
+  return <button className={`button button-${variant}`} {...props}>{children}</button>
+}
+
+function PracticeView() {
+  const [state, setState] = useState<TrainerState | null>(null)
+  const [principles, setPrinciples] = useState<PrinciplesState>({ pending: [], accepted: [] })
+  const [submission, setSubmission] = useState('')
+  const [micro, setMicro] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const [nextState, nextPrinciples] = await Promise.all([
+        apiFetch<TrainerState>('/api/state'),
+        apiFetch<PrinciplesState>('/api/principles'),
+      ])
+      setState(nextState)
+      setPrinciples(nextPrinciples)
+      if (nextState.latest_exercise?.status === 'prompted' && !submission) {
+        setSubmission(nextState.submission_template)
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '刷新失败')
+    }
+  }, [submission])
+
+  useEffect(() => {
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 3000)
+    return () => window.clearInterval(timer)
+  }, [refresh])
+
+  const latest = state?.latest_exercise
+  const run = async (url: string, init?: RequestInit) => {
+    setBusy(true); setError('')
+    try { await apiFetch(url, init); await refresh() }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '操作失败') }
+    finally { setBusy(false) }
+  }
+
+  const submit = () => latest && void run(`/api/exercise/${encodeURIComponent(latest.id)}/submit`, jsonBody({ text: submission }))
+  const submitMicro = () => latest && void run(`/api/exercise/${encodeURIComponent(latest.id)}/micro-revise`, jsonBody({ text: micro }))
+  const analyze = (video: Video) => void run('/api/analyze', jsonBody({ video: video.name }))
+  const upload = async () => {
+    const file = fileRef.current?.files?.[0]
+    if (!file) return
+    const form = new FormData(); form.append('file', file)
+    await run('/api/analyze', { method: 'POST', body: form })
+  }
+  const actionPrinciple = (candidate: Principle, action: 'accept' | 'reject', title = candidate.title, detail = candidate.detail) =>
+    void run(`/api/principles/${encodeURIComponent(candidate.id)}`, jsonBody({ action, title, detail }))
+
+  return <>
+    <header className="mobile-header"><span className="brand-mark">Taste Trainer</span><span className="mobile-subtitle">Video → palate</span></header>
+    <div className="page-head">
+      <div><span className="eyebrow">Practice / today</span><h1>Train your palate<br /><em>one video at a time.</em></h1></div>
+      <div className="head-actions"><a className="text-link" href={state?.a2h_url ?? '#'} target="_blank" rel="noreferrer">Open A2H ↗</a><span className="sync-dot" /> <span className="muted">同步中</span></div>
+    </div>
+
+    {error && <div className="alert">{error}<button onClick={() => setError('')}>×</button></div>}
+
+    <section className="hero-card">
+      <div className="hero-top"><div><span className="eyebrow">Current exercise</span><h2>{latest?.title ?? '还没有练习'}</h2><p>{latest ? 'Watch, taste, and identify the key flavor notes.' : '点击下方按钮生成第一道练习题。'}</p></div><div className="exercise-count"><strong>{state?.exercises.length ?? 0}</strong><span>EXERCISES</span></div></div>
+      {latest ? <div className="exercise-meta"><StatusPill status={latest.status} score={latest.score} /><span className="meta-divider" /><span className="muted mono">{latest.id}</span></div> : <div className="empty hero-empty">你的训练记录会从这里开始。</div>}
+    </section>
+
+    <div className="two-column">
+      <section className="panel submission-panel">
+        <SectionTitle eyebrow="Write it out" title={latest?.status === 'needs_micro_revision' ? '先完成 micro-v2' : '你的分镜方案'} />
+        {latest?.status === 'prompted' ? <><textarea value={submission} onChange={event => setSubmission(event.target.value)} placeholder="00:00–00:05 画面……" /><Button variant="primary" disabled={busy || !submission.trim()} onClick={submit}>提交并打分 <span>→</span></Button></> : latest?.status === 'needs_micro_revision' ? <><div className="focus-note"><span className="eyebrow">Focus / {state?.micro_focus?.dim ?? latest.weakest ?? 'weakest dimension'}</span><p>{state?.micro_focus?.original ?? '请重写一个 5–10 秒片段。'}</p><small>{state?.micro_focus?.gap ?? ''}</small></div><textarea value={micro} onChange={event => setMicro(event.target.value)} placeholder="只重写上面指出的一个 5–10 秒片段" /><Button variant="primary" disabled={busy || !micro.trim()} onClick={submitMicro}>提交 micro-v2 <span>→</span></Button></> : <Empty>{latest ? '这道题已完成。点击“出新题”继续。' : '还没有可提交的练习。'}</Empty>}
+      </section>
+
+      <section className="panel action-panel">
+        <SectionTitle eyebrow="Keep going" title="下一步" />
+        <div className="action-stack"><Button variant="primary" disabled={busy} onClick={() => void run('/api/exercise/new?force=0', { method: 'POST' })}>出一道新题 <span>→</span></Button><Button disabled={busy} onClick={() => void run('/api/exercise/new?force=1', { method: 'POST' })}>跳过当前题重出</Button></div>
+        <div className="rule" /><p className="muted small">建议完成一轮 micro-v2 后再开始下一题，这样反馈会进入下一次出题。</p>
+      </section>
+    </div>
+
+    <section className="panel"><SectionTitle eyebrow="Video library" title="分析视频" action={<span className="count-label">{state?.videos.length ?? 0} clips</span>} />
+      {state?.videos.length ? <div className="video-list">{state.videos.map(video => <div className="video-row" key={`${video.inbox}-${video.name}`}><div><span className="video-icon">{video.inbox ? '↓' : '▶'}</span><span>{video.name}</span>{video.inbox && <span className="tag">INBOX</span>}</div><Button disabled={busy} onClick={() => analyze(video)}>分析</Button></div>)}</div> : <Empty>videos/ 为空。上传一个视频开始分析。</Empty>}
+      <div className="upload-row"><input ref={fileRef} type="file" accept="video/*" /><Button variant="secondary" disabled={busy} onClick={() => void upload()}>上传并分析</Button></div>
+    </section>
+
+    <div className="two-column lower-grid">
+      <section className="panel"><SectionTitle eyebrow="Taste system" title="口味原则候选" /><p className="muted small">视频分析产生的原则不会自动进入评分基准，请人工接受或拒绝。</p>{principles.pending.length ? <div className="principle-list">{principles.pending.map(candidate => <PrincipleCard key={candidate.id} candidate={candidate} busy={busy} onAction={actionPrinciple} />)}</div> : <Empty>暂无待确认的原则候选。</Empty>}</section>
+      <section className="panel"><SectionTitle eyebrow="Operations" title="任务日志" />{Object.keys(state?.jobs ?? {}).length ? <div className="job-list">{Object.entries(state?.jobs ?? {}).reverse().map(([id, job]) => <div className="job-row" key={id}><StatusPill status={job.status} /><span className="mono truncate">{id}</span><span className="muted truncate">{job.detail}</span></div>)}</div> : <Empty>还没有后台任务。</Empty>}</section>
+    </div>
+
+    <section className="panel history-panel"><SectionTitle eyebrow="History" title="最近练习" />{state?.exercises.length ? <div className="history-table"><div className="history-head"><span>TITLE</span><span>STATUS</span><span>SCORE</span></div>{[...(state.exercises ?? [])].reverse().map(exercise => <div className="history-row" key={exercise.id}><strong>{exercise.title || exercise.id}</strong><StatusPill status={exercise.status} /><span className="mono">{exercise.score != null ? `${exercise.score}/100` : '—'}</span></div>)}</div> : <Empty>完成第一道题后，这里会显示训练历史。</Empty>}</section>
+  </>
+}
+
+function PrincipleCard({ candidate, busy, onAction }: { candidate: Principle; busy: boolean; onAction: (candidate: Principle, action: 'accept' | 'reject', title?: string, detail?: string) => void }) {
+  const [title, setTitle] = useState(candidate.title)
+  const [detail, setDetail] = useState(candidate.detail)
+  return <div className="principle-card"><input value={title} onChange={event => setTitle(event.target.value)} /><textarea value={detail} onChange={event => setDetail(event.target.value)} /><small className="muted">来源：{candidate.source_video || '—'}</small><div className="inline-actions"><Button disabled={busy} onClick={() => onAction(candidate, 'accept', title, detail)}>修改后接受</Button><Button variant="ghost" disabled={busy} onClick={() => onAction(candidate, 'reject')}>拒绝</Button></div></div>
+}
+
+export default function App() {
+  const [view, setView] = useState<View>(() => window.location.hash === '#providers' ? 'providers' : 'practice')
+  const [providerCount, setProviderCount] = useState(0)
+  useEffect(() => { void fetch(`${import.meta.env.VITE_PROVIDER_API_URL ?? '/provider-api'}/providers`, { credentials: 'include' }).then(response => response.ok ? response.json() : null).then(data => setProviderCount(data?.providers?.length ?? 0)).catch(() => undefined) }, [view])
+  const navigate = (next: View) => { window.history.replaceState(null, '', next === 'providers' ? '#providers' : '#practice'); setView(next) }
+  return <div className="app-shell"><aside className="sidebar"><div className="brand">Taste<br /><span>Trainer</span></div><p className="tagline">TRAIN YOUR PALATE<br />ONE VIDEO AT A TIME.</p><nav><button className={view === 'practice' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('practice')}><span>◉</span>Practice</button><button className="nav-item" onClick={() => navigate('practice')}><span>▱</span>Library</button><button className={view === 'providers' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('providers')}><span>◌</span>Providers {providerCount > 0 && <b>{providerCount}</b>}</button></nav><div className="sidebar-foot">BETTER COOKS<br />TASTE MORE.</div></aside><main className="main-content">{view === 'practice' ? <PracticeView /> : <ProviderManager onCountChange={setProviderCount} />}</main></div>
+}

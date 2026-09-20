@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import jobs, manifest
 from .config import load_settings, ws_dirs
@@ -201,149 +202,9 @@ async def principle_action(candidate_id: str, request: Request):
 
 # ------------------------------------------------------------------ page
 
-PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport"
-content="width=device-width,initial-scale=1">
-<title>视频脚本训练</title>
-<style>
-body{font:15px/1.6 -apple-system,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#222}
-.card{border:1px solid #ddd;border-radius:10px;padding:16px;margin:12px 0}
-button{padding:8px 16px;border-radius:8px;border:1px solid #888;background:#fff;cursor:pointer}
-button:hover{background:#f0f0f0}
-textarea{width:100%;min-height:260px;font:13px/1.5 ui-monospace,monospace;padding:10px;border:1px solid #ccc;border-radius:8px;box-sizing:border-box}
-.tag{display:inline-block;padding:2px 8px;border-radius:6px;background:#eee;font-size:12px;margin-right:6px}
-.succeeded{background:#e6f7e6}.running{background:#fff3cd}.failed{background:#fde8e8}
-#log{font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;color:#555}
-#microfocus{white-space:pre-wrap;background:#fafafa;padding:10px;border-radius:6px}
-.candidate{border-top:1px solid #ddd;padding:12px 0}.candidate textarea{min-height:90px}
-.candidate button{margin:8px 8px 0 0}
-a{color:#06c}
-</style>
-<h1>视频脚本训练</h1>
-<p><a id="a2h" href="#">→ 打开 A2H 审阅视图</a></p>
-<div class="card" id="ex"><h2>最新练习</h2><div id="exinfo">加载中…</div>
-<div id="submitbox" style="display:none">
-<p>把你的自然语言分镜粘到下面：</p>
-<textarea id="sub" placeholder="00:00–00:05 画面……（按 submission.md 的结构写）"></textarea>
-<button onclick="submitEx()">提交并打分</button></div></div>
-<div class="card" id="microbox" style="display:none">
-<h2>先做一个 micro-v2</h2><p id="microfocus"></p>
-<textarea id="micro" placeholder="只重写上面指出的一个 5–10 秒片段"></textarea>
-<button onclick="submitMicro()">提交 micro-v2，查看完整 revision</button></div>
-<div class="card"><h2>操作</h2>
-<button onclick="call('/api/exercise/new?force=0','POST').catch(err=>alert(err.message))">出新题</button>
-<button onclick="call('/api/exercise/new?force=1','POST').catch(err=>alert(err.message))">跳过当前题重出</button></div>
-<div class="card"><h2>分析视频</h2>
-<div id="vids">加载中…</div>
-<p>或上传新视频：<input type="file" id="up"><button onclick="upload()">上传并分析</button></p></div>
-<div class="card"><h2>口味原则候选</h2><p>视频分析产生的原则不会自动进入评分基准，请人工接受或拒绝。</p><div id="principles">加载中…</div></div>
-<div class="card"><h2>任务日志</h2><div id="log">—</div></div>
-<script>
-const H = {};
-let currentExercise = null;
-let refreshing = false;
-function make(tag, text='', className=''){
- const el=document.createElement(tag);if(text)el.textContent=text;
- if(className)el.className=className;return el;
-}
-async function call(u,m,opt={}){
- opt.method=m;opt.headers={...H,...(opt.headers||{})};
- const r=await fetch(u,opt);const j=await r.json();
- if(!r.ok)throw new Error(j.detail||'请求失败');
- await refresh();return j
-}
-async function refresh(){
- if(refreshing)return;refreshing=true;
- try{
-  const [sr,pr]=await Promise.all([
-   fetch('/api/state',{headers:H}),fetch('/api/principles',{headers:H})]);
-  const s=await sr.json(),p=await pr.json();
-  if(!sr.ok||!pr.ok)throw new Error(s.detail||p.detail||'刷新失败');
-  document.getElementById('a2h').href=s.a2h_url;
-  currentExercise=s.latest_exercise;
-  renderExercise(s);renderVideos(s.videos);renderPrinciples(p);renderJobs(s.jobs);
- }catch(err){document.getElementById('log').textContent=err.message}
- finally{refreshing=false}
-}
-function renderExercise(s){
- const box=document.getElementById('exinfo');box.replaceChildren();
- const e=s.latest_exercise;
- if(!e){box.textContent='还没有练习，点下方「出新题」。'}
- else{
-  box.append(make('span',e.id,'tag'),make('b',e.title||''),
-   make('span',e.status+(e.score!=null?' '+e.score+'/100':''),'tag '+e.status));
- }
- const submit=document.getElementById('submitbox');
- submit.style.display=e&&e.status==='prompted'?'block':'none';
- if(e&&e.status==='prompted'&&!document.getElementById('sub').value)
-  document.getElementById('sub').value=s.submission_template||'';
- const micro=document.getElementById('microbox');
- micro.style.display=e&&e.status==='needs_micro_revision'?'block':'none';
- if(e&&e.status==='needs_micro_revision'){
-  const f=s.micro_focus||{};
-  document.getElementById('microfocus').textContent=
-   `${f.dim||e.weakest||'最弱维度'}\n原方案：${f.original||'—'}\n差距：${f.gap||'请重写一个 5–10 秒片段。'}`;
- }
-}
-function renderVideos(videos){
- const box=document.getElementById('vids');box.replaceChildren();
- if(!videos.length){box.textContent='videos/ 为空';return}
- for(const v of videos){
-  const row=make('div');row.append(document.createTextNode((v.inbox?'📥 ':'')+v.name+' '));
-  const button=make('button','分析');
-  button.addEventListener('click',()=>call('/api/analyze','POST',{
-   headers:{'Content-Type':'application/json'},body:JSON.stringify({video:v.name})
-  }).catch(err=>alert(err.message)));
-  row.append(button);box.append(row);
- }
-}
-function renderPrinciples(data){
- const box=document.getElementById('principles');box.replaceChildren();
- if(!data.pending.length){box.textContent='暂无待确认的原则候选。';return}
- for(const c of data.pending){
-  const card=make('div','', 'candidate');
-  const title=make('input');title.value=c.title;title.style.width='100%';
-  const detail=make('textarea');detail.value=c.detail;detail.style.minHeight='90px';
-  const evidence=make('p','证据：'+(Array.isArray(c.evidence)?JSON.stringify(c.evidence):c.evidence||'—'));
-  const source=make('small','来源：'+(c.source_video||'—'));
-  const accept=make('button','修改后接受');
-  accept.addEventListener('click',()=>call('/api/principles/'+encodeURIComponent(c.id),'POST',{
-   headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'accept',title:title.value,detail:detail.value})
-  }).catch(err=>alert(err.message)));
-  const reject=make('button','拒绝');
-  reject.addEventListener('click',()=>call('/api/principles/'+encodeURIComponent(c.id),'POST',{
-   headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'reject'})
-  }).catch(err=>alert(err.message)));
-  card.append(title,detail,evidence,source,accept,reject);box.append(card);
- }
-}
-function renderJobs(jobs){
- const box=document.getElementById('log');box.replaceChildren();
- const entries=Object.entries(jobs).reverse();
- if(!entries.length){box.textContent='—';return}
- for(const [key,value] of entries){
-  const row=make('div');row.append(make('span',value.status,'tag '+value.status),
-   document.createTextNode(key+' '+(value.detail||'')));box.append(row);
- }
-}
-async function submitEx(){
- if(!currentExercise)return;
- try{await call('/api/exercise/'+encodeURIComponent(currentExercise.id)+'/submit','POST',
-  {headers:{'Content-Type':'application/json'},body:JSON.stringify({text:document.getElementById('sub').value})})}
- catch(err){alert(err.message)}
-}
-async function submitMicro(){
- if(!currentExercise)return;
- try{await call('/api/exercise/'+encodeURIComponent(currentExercise.id)+'/micro-revise','POST',
-  {headers:{'Content-Type':'application/json'},body:JSON.stringify({text:document.getElementById('micro').value})})}
- catch(err){alert(err.message)}
-}
-async function upload(){
- const f=document.getElementById('up').files[0];if(!f)return;
- const fd=new FormData();fd.append('file',f);
- try{await call('/api/analyze','POST',{body:fd})}catch(err){alert(err.message)}
-}
-refresh();setInterval(refresh,3000);
-</script>"""
+FRONTEND_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
+if (FRONTEND_DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -360,4 +221,12 @@ def page(request: Request):
             secure=request.url.scheme == "https",
         )
         return response
-    return PAGE
+    index = FRONTEND_DIST / "index.html"
+    if index.exists():
+        return HTMLResponse(index.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'><title>Taste Trainer</title>"
+        "<p>前端尚未构建。开发时运行 <code>cd web && npm run dev</code>；"
+        "生产环境先运行 <code>npm run build</code>。</p>",
+        status_code=503,
+    )

@@ -21,7 +21,7 @@ LLM 不手改结构化文件。每次任务还会写 `.a2h/runs/<job>.json`，�
 ```
 service/
 ├── app/
-│   ├── api.py        FastAPI + 单页仪表盘（出题按钮/提交框/上传视频）
+│   ├── api.py        FastAPI 业务 API + React 静态文件入口
 │   ├── jobs.py       三个 LLM 任务
 │   ├── llm.py        OpenAI-compatible 客户端（chat_json + 视觉图传）
 │   ├── pipeline.py   ffmpeg 抽帧/拼图
@@ -30,6 +30,8 @@ service/
 │   ├── principles.py 人工确认的口味原则候选与 ledger
 │   ├── schemas.py    LLM 评分 JSON 校验与归一化
 │   └── prompts/      每个任务的 system prompt（{{var}} 占位符）
+├── web/              Vite + React + TypeScript 仪表盘
+└── provider-service/ Node AI SDK provider registry 与模型发现服务
 ├── deploy/           setup.sh + systemd 单元
 └── scripts/          rsync-data.sh.example
 ```
@@ -41,12 +43,31 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # 填 WORKSPACE_DIR / LLM_* 
 uvicorn app.api:app --port 8421
+# 另一个终端：cd provider-service && npm install && npm run dev
+# 再一个终端：cd web && npm install && npm run dev
 # 另一个终端：a2h render $WORKSPACE_DIR -w -p 8420
 ```
 
-打开 http://localhost:8421 出题/提交/上传分析。评审后先完成一个 micro-v2，
+打开 http://localhost:5173 出题/提交/上传分析。评审后先完成一个 micro-v2，
 再展开 LLM 生成的完整 revision；视频分析产生的原则候选需要人工接受后才会
 进入 `analyses/PRINCIPLES.md`。
+
+### 前端与 provider
+
+原来的前端是 `app/api.py` 里的内嵌 HTML + 原生 JavaScript。现在前端改为
+Vite + React + TypeScript：React 只负责界面和交互，Python FastAPI 继续负责
+训练任务、视频处理和数据一致性。
+
+`provider-service/` 使用 Vercel AI SDK 的
+`@ai-sdk/openai-compatible` 封装自定义 `baseURL` 的 provider，并用
+`createProviderRegistry` 管理多个 provider。Providers 页面保存 name/base URL/API
+key 到 `WORKSPACE_DIR/.a2h/providers.json`（权限 0600），浏览器只收到掩码状态和
+模型列表。点击“检测模型”会由服务端请求 `<baseURL>/models`，勾选项会限制可用的
+`providerId:modelId`；“全部/取消全部”只修改当前 provider 的允许模型集合。
+
+生产环境先构建 `web` 和 `provider-service`，FastAPI 会提供 `web/dist`；把
+`deploy/nginx.conf.example` 中的 `/provider-api/` 反向代理配置加入 Nginx，
+再启用 `trainer-api`、`provider-service` 和 `a2h-view`。
 
 ## VPS 部署
 
@@ -55,7 +76,7 @@ git clone <repo> /srv/video-trainer/service
 sudo bash /srv/video-trainer/service/deploy/setup.sh
 # 配 .env → rsync 数据（scripts/rsync-data.sh.example）→ 装 systemd 单元
 sudo cp deploy/*.service /etc/systemd/system/  # 改路径/用户
-sudo systemctl enable --now trainer-api a2h-view
+sudo systemctl enable --now trainer-api provider-service a2h-view
 ```
 
 ## 接口速查
