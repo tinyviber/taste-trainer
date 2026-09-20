@@ -2,6 +2,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
 
 @dataclass
 class Settings:
@@ -15,6 +20,8 @@ class Settings:
     api_token: str = ""
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
+    max_upload_mb: int = 1024
+    max_video_seconds: int = 1800
 
 
 def load_settings() -> Settings:
@@ -37,6 +44,8 @@ def load_settings() -> Settings:
         api_token=os.environ.get("API_TOKEN", ""),
         ffmpeg=os.environ.get("FFMPEG_BIN", "ffmpeg"),
         ffprobe=os.environ.get("FFPROBE_BIN", "ffprobe"),
+        max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", "1024")),
+        max_video_seconds=int(os.environ.get("MAX_VIDEO_SECONDS", "1800")),
     )
 
 
@@ -55,5 +64,17 @@ def ws_dirs(ws: Path) -> dict:
         "rubric": ws / "RUBRIC.md",
         "pool": ws / "PROMPT_POOL.md",
         "principles": ws / "analyses" / "PRINCIPLES.md",
+        "principles_meta": ws / "analyses" / "principles.json",
         "manifest": ws / ".a2h" / "manifest.json",
     }
+
+
+def safe_child(root: Path, name: str) -> Path:
+    """Resolve a user-provided relative name and keep it under ``root``."""
+    if not name or Path(name).is_absolute():
+        raise ValueError("path must be a non-empty relative path")
+    root = root.resolve()
+    candidate = (root / name).resolve()
+    if candidate == root or root not in candidate.parents:
+        raise ValueError("path escapes workspace")
+    return candidate

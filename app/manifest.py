@@ -19,7 +19,10 @@ def _scan_dirs(parent: Path) -> list[tuple[Path, dict]]:
     for d in sorted(parent.iterdir()):
         if d.is_dir() and not d.name.startswith("_"):
             out.append((d, load_meta(d)))
-    return out
+    return sorted(
+        out,
+        key=lambda item: item[1].get("created_at", item[1].get("id", item[0].name)),
+    )
 
 
 def _exercise_items(d: Path, meta: dict) -> tuple[list[dict], list[str]]:
@@ -27,10 +30,16 @@ def _exercise_items(d: Path, meta: dict) -> tuple[list[dict], list[str]]:
     specs = [
         ("review.md", "review", "评分与修改意见", 100),
         ("revision.md", "candidate", "修改版分镜 v2", 95),
+        ("micro_revision.md", "submission", "我的局部改写 micro-v2", 94),
+        ("grade.json", "data", "完整评分数据", 92),
         ("submission.md", "submission", "分镜方案", 90),
         ("prompt.md", "prompt", "题目", 80),
     ]
     for fname, role, label, pri in specs:
+        # Keep the full model revision machine-readable on disk, but do not
+        # surface it in the review view before the learner submits micro-v2.
+        if fname == "grade.json" and meta.get("status") != "reviewed":
+            continue
         if (d / fname).exists():
             rel = f"{d.parent.name}/{d.name}/{fname}"
             items.append({
@@ -57,6 +66,28 @@ def _analysis_items(d: Path, meta: dict, latest: bool) -> tuple[list[dict], list
             "group": "analysis", "taskId": f"analysis-{d.name}",
             "priority": 70 if latest else 40,
             "tags": ["final"],
+        })
+        artifacts.append(rel)
+    candidates = d / "principles_candidates.json"
+    if candidates.exists():
+        rel = f"analyses/{d.name}/principles_candidates.json"
+        items.append({
+            "path": rel, "role": "data",
+            "title": f"原则候选：{meta.get('title', d.name)}",
+            "summary": "等待人工接受、修改后接受或拒绝",
+            "group": "reference", "taskId": f"analysis-{d.name}",
+            "priority": 55,
+        })
+        artifacts.append(rel)
+    frame_map = d / "frame_manifest.json"
+    if frame_map.exists():
+        rel = f"analyses/{d.name}/frame_manifest.json"
+        items.append({
+            "path": rel, "role": "data",
+            "title": f"帧时间映射：{meta.get('title', d.name)}",
+            "summary": "关键帧 id 与真实 timestamp 的确定性映射",
+            "group": "evidence", "taskId": f"analysis-{d.name}",
+            "priority": 64,
         })
         artifacts.append(rel)
     if latest:
@@ -93,6 +124,7 @@ def regenerate(ws: Path, dirs: dict) -> Path:
                 "id": m.get("id", d.name),
                 "title": f"练习：{m.get('title', d.name)}",
                 "status": {"prompted": "running", "submitted": "running",
+                           "needs_micro_revision": "running",
                            "reviewed": "succeeded"}.get(status, status),
                 "summary": m.get("summary", ""),
                 "artifacts": ex_art,
@@ -129,6 +161,7 @@ def regenerate(ws: Path, dirs: dict) -> Path:
     latest_an = an_metas[-1] if an_metas else {}
     status_map = {"prompted": ("running", "题目已出，等待提交分镜后点「打分」"),
                   "submitted": ("running", "分镜已提交，可点评审"),
+                  "needs_micro_revision": ("running", "评审完成，先提交一个 micro-v2 再查看完整 revision"),
                   "reviewed": ("succeeded",
                                f"已评审：{latest_ex.get('score', '?')}/100"
                                f"｜最强={latest_ex.get('strongest', '—')}"

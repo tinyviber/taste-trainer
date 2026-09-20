@@ -9,6 +9,12 @@ WORKSPACE_DIR="${2:-/srv/video-trainer/workspace}" # 数据目录
 apt-get update
 apt-get install -y ffmpeg python3-venv nodejs npm
 
+# Run both services as a dedicated unprivileged account.
+if ! id -u videotrainer >/dev/null 2>&1; then
+  useradd --system --home-dir /srv/video-trainer --create-home \
+    --shell /usr/sbin/nologin videotrainer
+fi
+
 # 2) a2h 查看器
 npm install -g @tinyviber/a2h
 
@@ -18,6 +24,7 @@ python3 -m venv "$SERVICE_DIR/.venv"
 
 # 4) 数据目录骨架
 mkdir -p "$WORKSPACE_DIR"/{videos/inbox,runs,analyses,exercises/_template,.a2h/runs}
+chown -R videotrainer:videotrainer "$SERVICE_DIR" "$WORKSPACE_DIR"
 
 echo ""
 echo "完成。下一步："

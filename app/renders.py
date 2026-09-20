@@ -147,9 +147,23 @@ def render_analysis_md(d: dict, source: str, duration: float) -> str:
     shots = "\n".join(
         f"| {s['time']} | {s['shot']} | {s['function']} |"
         for s in d.get("shots", []))
-    prins = "\n\n".join(
-        f"### {i + 1}. {p['title']}\n\n{p['detail']}"
-        for i, p in enumerate(d.get("principles", [])))
+    principle_blocks = []
+    for i, p in enumerate(d.get("principles", [])):
+        evidence = p.get("evidence", [])
+        if isinstance(evidence, list):
+            evidence_text = "; ".join(
+                " ".join(str(item.get(key, "")) for key in ("frame", "time", "why")
+                         if item.get(key))
+                if isinstance(item, dict) else str(item)
+                for item in evidence
+            )
+        else:
+            evidence_text = str(evidence or "")
+        principle_blocks.append(
+            f"### {i + 1}. {p.get('title', '')}\n\n{p.get('detail', '')}\n\n"
+            f"证据：{evidence_text or '—'}"
+        )
+    prins = "\n\n".join(principle_blocks)
     return f"""# 视频分镜分析：{d.get('title_cn', '')}
 
 来源：{source}，时长约 {duration:.0f} 秒。
@@ -158,13 +172,13 @@ def render_analysis_md(d: dict, source: str, duration: float) -> str:
 
 {d.get('story', '')}
 
-## 镜头清单
+## 关键段落与注意力事件
 
 | 时间 | 镜头 | 作用 |
 |---|---|---|
 {shots}
 
-## 可复用原则
+## 原则候选（需人工确认）
 
 {prins}
 """
@@ -172,7 +186,9 @@ def render_analysis_md(d: dict, source: str, duration: float) -> str:
 
 def render_index_md(metas: list[dict]) -> str:
     rows = []
-    for m in sorted(metas, key=lambda x: x.get("id", ""), reverse=True):
+    for m in sorted(metas,
+                    key=lambda x: x.get("created_at", x.get("id", "")),
+                    reverse=True):
         score = m.get("score")
         score_s = f"**{score}**/100" if score is not None else (
             "待评审" if m.get("status") != "skipped" else "跳过")

@@ -24,9 +24,11 @@ service/
 │   ├── api.py        FastAPI + 单页仪表盘（出题按钮/提交框/上传视频）
 │   ├── jobs.py       三个 LLM 任务
 │   ├── llm.py        OpenAI-compatible 客户端（chat_json + 视觉图传）
-│   ├── pipeline.py   ffmpeg 抽帧/拼图/音频
+│   ├── pipeline.py   ffmpeg 抽帧/拼图
 │   ├── renders.py    JSON → markdown 渲染器 + INDEX.md 重生成
 │   ├── manifest.py   .a2h/manifest.json 重生成（策展规则内置）
+│   ├── principles.py 人工确认的口味原则候选与 ledger
+│   ├── schemas.py    LLM 评分 JSON 校验与归一化
 │   └── prompts/      每个任务的 system prompt（{{var}} 占位符）
 ├── deploy/           setup.sh + systemd 单元
 └── scripts/          rsync-data.sh.example
@@ -42,7 +44,9 @@ uvicorn app.api:app --port 8421
 # 另一个终端：a2h render $WORKSPACE_DIR -w -p 8420
 ```
 
-打开 http://localhost:8421 出题/提交/上传分析。
+打开 http://localhost:8421 出题/提交/上传分析。评审后先完成一个 micro-v2，
+再展开 LLM 生成的完整 revision；视频分析产生的原则候选需要人工接受后才会
+进入 `analyses/PRINCIPLES.md`。
 
 ## VPS 部署
 
@@ -62,15 +66,25 @@ sudo systemctl enable --now trainer-api a2h-view
 | GET | `/api/state` | 最新练习/视频列表/任务状态 |
 | POST | `/api/exercise/new?force=0` | 出题（force=1 跳过当前题） |
 | POST | `/api/exercise/{id}/submit` | `{"text":"..."}` → 打分 |
+| POST | `/api/exercise/{id}/micro-revise` | 提交局部改写并展开完整 revision |
 | POST | `/api/analyze` | multipart 上传 或 `{"video":"name"}` |
 | GET | `/api/jobs` | 任务状态 |
+| GET | `/api/principles` | 查看原则候选与已接受原则 |
+| POST | `/api/principles/{candidate_id}` | 接受、修改后接受或拒绝候选 |
 
-设了 `API_TOKEN` 后请求需带 `X-Token` 头或 `?token=`。
+设了 `API_TOKEN` 后 API 请求需带 `X-Token`；浏览器可首次用 `/?token=...`
+引导，服务会立即跳回无 token 的 URL 并写入 HttpOnly cookie。
 
 ## 数据约定（工作区侧）
 
-- `exercises/<slug>/meta.json`：练习状态机 `prompted → submitted → reviewed|skipped`
+- `exercises/<slug>/meta.json`：练习状态机 `prompted → submitted → needs_micro_revision → reviewed|skipped`
+- `exercises/<slug>/grade.json`：完整、校验过的十维评分 JSON；`total` 由服务端计算
+- `exercises/<slug>/micro_revision.md`：提交的局部 v2；提交后才生成 `revision.md`
 - `analyses/<slug>/meta.json`：标题/摘要/stats/keyframe_notes
+- `analyses/<slug>/frame_manifest.json`：frame id 到真实 timestamp 的映射
+- `analyses/<slug>/principles_candidates.json`：待人工确认的原则候选
+- 视频分析的报告按关键段落、镜头转换和注意力事件组织，不伪造逐秒 transcription
 - `analyses/PRINCIPLES.md`：口味基准，评审时注入，越用越准
+- `analyses/principles.json`：已接受原则的机器可读 ledger
 - `videos/inbox/`：丢视频进去即可分析
 - `runs/`：中间产物，可再生，rsync 时排除

@@ -8,7 +8,8 @@ EnvironmentFile=/srv/video-trainer/service/.env
 ExecStart=/srv/video-trainer/service/.venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8421
 Restart=on-failure
 RestartSec=3
-# User=videotrainer
+User=videotrainer
+Group=videotrainer
 
 [Install]
 WantedBy=multi-user.target
