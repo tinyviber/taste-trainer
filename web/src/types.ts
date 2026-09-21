@@ -56,7 +56,13 @@ export type ProviderInput = {
   name: string
   baseUrl: string
   apiKey?: string
+  models?: ModelInfo[]
   selectedModelIds?: string[]
+}
+
+export type UserSettings = {
+  default_provider_id: string
+  default_model_id: string
 }
 
 export type AuthUser = {

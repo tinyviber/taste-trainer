@@ -24,6 +24,9 @@ class Settings:
     provider_service_url: str = "http://127.0.0.1:8765"
     provider_internal_secret: str = ""
     web_origins: tuple[str, ...] = ()
+    user_id: str = ""
+    default_provider_id: str = ""
+    default_model_id: str = ""
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     max_upload_mb: int = 1024

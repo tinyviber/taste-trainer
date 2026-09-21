@@ -46,6 +46,12 @@ function sendJson(response: ServerResponse, status: number, value: unknown) {
   response.end(JSON.stringify(value))
 }
 
+function sendRaw(response: ServerResponse, status: number, body: string, contentType = 'application/json') {
+  response.statusCode = status
+  response.setHeader('Content-Type', contentType)
+  response.end(body)
+}
+
 function safeUserId(userId: string) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
     throw new Error('invalid authenticated user')
@@ -296,10 +302,23 @@ async function discover(baseUrl: string, apiKey: string) {
   if (!response.ok) throw new Error(`模型检测失败（HTTP ${response.status}）`)
   const rows = Array.isArray(data) ? data : data?.data
   if (!Array.isArray(rows)) throw new Error('响应不是 OpenAI-compatible 模型列表')
-  return rows.map(row => ({
-    id: typeof row === 'string' ? row : String((row as Record<string, unknown>).id ?? ''),
-    owned_by: typeof row === 'object' && row ? String((row as Record<string, unknown>).owned_by ?? '') || undefined : undefined,
-  })).filter(model => model.id)
+  return normalizeModels(rows)
+}
+
+function normalizeModels(value: unknown): ModelInfo[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  return value.flatMap(row => {
+    const id = typeof row === 'string' ? row.trim() : typeof row === 'object' && row
+      ? String((row as Record<string, unknown>).id ?? '').trim()
+      : ''
+    if (!id || seen.has(id)) return []
+    seen.add(id)
+    const ownedBy = typeof row === 'object' && row
+      ? String((row as Record<string, unknown>).owned_by ?? '').trim() || undefined
+      : undefined
+    return [{ id, owned_by: ownedBy }]
+  })
 }
 
 function findProvider(providers: StoredProvider[], id: string) {
@@ -317,17 +336,24 @@ function parseBody(body: Buffer): Record<string, unknown> {
 async function route(request: IncomingMessage, response: ServerResponse, userId: string, body: Buffer) {
   const url = new URL(request.url ?? '/', 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
+  const providers = await readProviders(userId)
   if (request.method === 'GET' && parts.length === 1 && parts[0] === 'providers') {
-    const providers = await readProviders(userId)
     return sendJson(response, 200, { providers: providers.map(publicProvider) })
   }
   if (request.method === 'POST' && parts.length === 2 && parts[0] === 'providers' && parts[1] === 'test') {
     const input = parseBody(body)
-    const baseUrl = normalizeBaseUrl(requireText(input.baseUrl, 'base URL'))
-    const models = await discover(baseUrl, requireText(input.apiKey, 'API key'))
+    const saved = typeof input.id === 'string' && input.id ? findProvider(providers, input.id) : undefined
+    const baseUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim()
+      ? normalizeBaseUrl(input.baseUrl)
+      : saved?.baseUrl
+    if (!baseUrl) throw new Error('base URL 不能为空')
+    const submittedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
+    if (saved && baseUrl !== saved.baseUrl && !submittedKey) {
+      throw new Error('修改 base URL 后必须重新填写 API key')
+    }
+    const models = await discover(baseUrl, submittedKey || saved?.apiKey || '')
     return sendJson(response, 200, { models })
   }
-  const providers = await readProviders(userId)
   if (request.method === 'POST' && parts.length === 1 && parts[0] === 'providers') {
     const input = parseBody(body)
     const existing = typeof input.id === 'string' && input.id ? providers.find(item => item.id === input.id) : undefined
@@ -337,15 +363,17 @@ async function route(request: IncomingMessage, response: ServerResponse, userId:
     if (existing && existing.baseUrl !== baseUrl && !submittedKey) {
       throw new Error('修改 base URL 后必须重新填写 API key')
     }
+    const models = Array.isArray(input.models) ? normalizeModels(input.models) : existing?.models ?? []
+    const modelIds = new Set(models.map(model => model.id))
     await assertSafeUrl(baseUrl)
     const provider: StoredProvider = {
       id,
       name: requireText(input.name, 'provider name'),
       baseUrl,
       apiKey: submittedKey || existing?.apiKey || '',
-      models: existing?.models ?? [],
+      models,
       selectedModelIds: Array.isArray(input.selectedModelIds)
-        ? [...new Set(input.selectedModelIds.filter(item => typeof item === 'string'))]
+        ? [...new Set(input.selectedModelIds.filter((item): item is string => typeof item === 'string' && modelIds.has(item)))]
         : existing?.selectedModelIds ?? [],
       selectionInitialized: Array.isArray(input.selectedModelIds) || (existing?.selectionInitialized ?? false),
       lastDiscoveryAt: existing?.lastDiscoveryAt,
@@ -381,6 +409,18 @@ async function route(request: IncomingMessage, response: ServerResponse, userId:
     }
     await queueSave(userId, providers.map(item => item.id === provider.id ? nextProvider : item))
     return sendJson(response, 200, { provider: publicProvider(nextProvider), models })
+  }
+  if (request.method === 'POST' && parts.length === 3 && parts[2] === 'completions') {
+    const input = parseBody(body)
+    const modelId = requireText(input.model, 'modelId')
+    if (!provider.selectedModelIds.includes(modelId)) throw new Error('该模型未被勾选启用')
+    await assertSafeUrl(provider.baseUrl)
+    const upstream = await safeFetch(`${provider.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
+      body: JSON.stringify(input),
+    })
+    return sendRaw(response, upstream.status, await upstream.text(), upstream.headers.get('content-type') ?? 'application/json')
   }
   if (request.method === 'POST' && parts.length === 3 && parts[2] === 'chat') {
     const input = parseBody(body)

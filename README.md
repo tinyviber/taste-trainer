@@ -72,7 +72,9 @@ Vite + React + TypeScript：React 只负责界面和交互，Python FastAPI 继�
 浏览器访问的是同源 `/api/provider-api/*`；FastAPI 验证 session/CSRF 后，通过带
 时间戳、nonce 和 body 签名的本机通道调用 Node。Provider 数据按用户写入 AES-GCM
 加密文件，密钥只放部署侧的 provider secret 文件。检测失败后可以修改 key/base URL
-并直接重新检测，不需要刷新。
+并直接重新检测，不需要刷新；检测只读取模型列表，保存配置才写入当前配置和勾选的模型。
+配置完成后可以在 Settings 中从当前用户已勾选的模型里选择 Default model；该选择按用户保存，
+出题、评分和视频分析会通过签名的本机通道使用它，不会把 provider API key 送到浏览器。
 轮换密钥时停掉 provider service，备份加密目录后生成新 key，并以
 `PROVIDER_ENCRYPTION_KEY=<new> PROVIDER_ROTATE_FROM_KEY=<old> node dist/server.js`
 运行一次；成功后只保留新 key，再启动服务。
@@ -119,11 +121,15 @@ sudo -u videotrainer-api /srv/video-trainer/service/.venv/bin/python \
 | POST | `/api/auth/change-password` | 修改密码并撤销旧 session |
 | POST | `/api/auth/logout` | 注销当前 session |
 | GET | `/api/provider-api/providers` | 当前用户的 provider（不含 API key） |
+| GET | `/api/settings` | 当前用户的默认 provider/model 选择 |
+| PUT | `/api/settings` | 保存当前用户的默认 provider/model 选择 |
 
 认证入口为 `/api/auth/login`、`/api/auth/me`、`/api/auth/logout` 和
 `/api/auth/change-password`；没有注册接口。密码 hash、session hash 和用户 ID 存在
 SQLite，训练数据存放于 `WORKSPACE_DIR/users/<user-uuid>/`。旧的 `API_TOKEN`、
 `X-Token`、query token 和公网 `/provider-api/` 都不再是认证旁路。
+用户的默认模型选择存放在该用户工作区的 `.trainer-settings.json`，只包含 provider/model ID，
+不包含 API key。
 
 ## 数据约定（工作区侧）
 

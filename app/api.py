@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, jobs, manifest
+from . import auth, jobs, manifest, user_settings as user_settings_store
 from .config import load_settings, ws_dirs
 from .principles import state as principles_state
 from .principles import update_candidate
@@ -97,7 +97,15 @@ async def _auth(request: Request) -> auth.User:
 def _user_settings(user: auth.User):
     workspace = auth.user_workspace(settings.workspace, user.id)
     workspace.mkdir(parents=True, exist_ok=True)
-    return replace(settings, workspace=workspace, a2h_url="")
+    selection = user_settings_store.load(workspace)
+    return replace(
+        settings,
+        workspace=workspace,
+        a2h_url="",
+        user_id=user.id,
+        default_provider_id=selection["default_provider_id"],
+        default_model_id=selection["default_model_id"],
+    )
 
 
 def _jobs_for(user_id: str) -> dict[str, dict]:
@@ -257,7 +265,7 @@ def _proxy_provider(path: str, query: str, method: str, body: bytes,
 async def _provider_proxy(path: str, request: Request):
     user = await _auth(request)
     if request.method == "POST" and (
-        path == "providers/test" or path.endswith("/discover") or path.endswith("/chat")
+        path == "providers/test" or path.endswith("/discover") or path.endswith("/chat") or path.endswith("/completions")
     ):
         client = request.client.host if request.client else "unknown"
         if not auth.allow_rate(
@@ -280,6 +288,50 @@ async def provider_proxy(path: str, request: Request):
 
 
 # ------------------------------------------------------------------ training api
+
+@app.get("/api/settings")
+async def settings_get(request: Request):
+    user = await _auth(request)
+    return user_settings_store.load(auth.user_workspace(settings.workspace, user.id))
+
+
+@app.put("/api/settings")
+async def settings_put(request: Request):
+    user = await _auth(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "设置格式无效")
+    provider_id = body.get("default_provider_id", body.get("defaultProviderId"))
+    model_id = body.get("default_model_id", body.get("defaultModelId"))
+    try:
+        values = user_settings_store.normalize(provider_id, model_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if values["default_provider_id"]:
+        status, content, _ = await asyncio.to_thread(
+            _proxy_provider, "providers", "", "GET", b"", user
+        )
+        if status != 200:
+            raise HTTPException(503, "provider service unavailable")
+        try:
+            payload = json.loads(content)
+            providers = payload.get("providers", []) if isinstance(payload, dict) else []
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(503, "provider service returned invalid data") from exc
+        if not isinstance(providers, list):
+            raise HTTPException(503, "provider service returned invalid data")
+        provider = next(
+            (item for item in providers if isinstance(item, dict)
+             and item.get("id") == values["default_provider_id"]),
+            None,
+        )
+        selected = provider.get("selectedModelIds", []) if provider else []
+        if not isinstance(selected, list) or values["default_model_id"] not in selected:
+            raise HTTPException(400, "请选择当前 provider 中已勾选的模型")
+    return user_settings_store.save(
+        auth.user_workspace(settings.workspace, user.id),
+        values["default_provider_id"], values["default_model_id"],
+    )
 
 @app.get("/api/state")
 async def state(request: Request):

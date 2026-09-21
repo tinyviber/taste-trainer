@@ -126,7 +126,7 @@ def new_exercise(settings: Settings, force: bool = False) -> dict:
 
     history = "\n".join(f"- {m.get('title', d.name)}" for d, m in existing) or "（无）"
     data = chat_json(
-        _client(settings), settings.llm_model,
+        _client(settings), _model(settings),
         renders.load_prompt(
             "gen_prompt",
             pool=renders.read(dirs["pool"], "（题库为空，请原创）"),
@@ -183,7 +183,7 @@ def grade(settings: Settings, exercise_id: str, submission_text: str) -> dict:
     renders.save_meta(ex_dir, meta)
 
     raw_data = chat_json(
-        _client(settings), settings.llm_model,
+        _client(settings), _model(settings),
         renders.load_prompt(
             "grade",
             rubric=renders.read(dirs["rubric"]),
@@ -295,7 +295,7 @@ def analyze(settings: Settings, video_name: str) -> dict:
     step = max(1, len(sheets) // 24 + (1 if len(sheets) % 24 else 0))
     sheets_send = sheets[::step]
     p1 = chat_json(
-        _client(settings), settings.llm_vision_model,
+        _client(settings), _model(settings, vision=True),
         renders.load_prompt("analyze_pass1"),
         user=[{"type": "text", "text":
                f"共 {len(sheets)} 张拼图（本次发送每第 {step} 张）。视频约 {duration:.0f} 秒。"
@@ -309,7 +309,7 @@ def analyze(settings: Settings, video_name: str) -> dict:
     kf_ids = [k for k in kf_ids if k and (small_dir / f"{k}.jpg").exists()]
     kf_imgs = [small_dir / f"{k}.jpg" for k in kf_ids][:16]
     p2 = chat_json(
-        _client(settings), settings.llm_vision_model,
+        _client(settings), _model(settings, vision=True),
         renders.load_prompt("analyze_pass2", pass1=json.dumps(p1, ensure_ascii=False)),
         user=[{"type": "text", "text":
                "附关键帧：" + ", ".join(f"{k}={frame_map.get(k, '未知')}" for k in kf_ids[:16])
@@ -365,9 +365,27 @@ def analyze(settings: Settings, video_name: str) -> dict:
 _client_cache = {}
 
 
+def _model(settings: Settings, vision: bool = False) -> str:
+    if settings.default_provider_id and settings.default_model_id:
+        return settings.default_model_id
+    return settings.llm_vision_model if vision else settings.llm_model
+
+
 def _client(settings: Settings):
     from .llm import make_client
-    key = (settings.llm_base_url, settings.llm_api_key)
+    if settings.user_id and settings.default_provider_id and settings.default_model_id:
+        from .provider_client import ProviderClient
+        key = ("provider", settings.user_id, settings.default_provider_id,
+               settings.provider_service_url, settings.provider_internal_secret)
+        if key not in _client_cache:
+            _client_cache[key] = ProviderClient(
+                settings.provider_service_url,
+                settings.provider_internal_secret,
+                settings.user_id,
+                settings.default_provider_id,
+            )
+        return _client_cache[key]
+    key = ("global", settings.llm_base_url, settings.llm_api_key)
     if key not in _client_cache:
-        _client_cache[key] = make_client(*key)
+        _client_cache[key] = make_client(settings.llm_base_url, settings.llm_api_key)
     return _client_cache[key]

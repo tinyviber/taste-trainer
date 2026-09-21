@@ -15,7 +15,7 @@ function Field({ id, label, children }: { id: string; label: string; children: R
 
 type Draft = Provider & { apiKey: string; notice: string; busy: boolean; error: string }
 
-type DiscoveryResponse = { provider?: Provider; models: ModelInfo[] }
+type DiscoveryResponse = { models: ModelInfo[] }
 
 function toDraft(provider: Provider): Draft {
   return { ...provider, apiKey: '', notice: '', busy: false, error: '' }
@@ -47,30 +47,11 @@ export function ProviderManager({ onCountChange, onUnauthorized }: { onCountChan
     let savedId = draft.id
     update(draft.id, { busy: true, error: '', notice: '' })
     try {
-      const data = await providerFetch<{ provider: Provider }>('/providers', jsonBody({ id: isDraft ? undefined : draft.id, name: draft.name, baseUrl: draft.baseUrl, apiKey: draft.apiKey || undefined, selectedModelIds: draft.selectedModelIds }))
+      const data = await providerFetch<{ provider: Provider }>('/providers', jsonBody({ id: isDraft ? undefined : draft.id, name: draft.name, baseUrl: draft.baseUrl, apiKey: draft.apiKey || undefined, models: draft.models, selectedModelIds: draft.selectedModelIds }))
       savedId = data.provider.id
-      if (data.provider.hasApiKey) {
-        try {
-          const detected = await providerFetch<DiscoveryResponse>(`/providers/${encodeURIComponent(data.provider.id)}/discover`, jsonBody({ baseUrl: draft.baseUrl, apiKey: draft.apiKey }))
-          setProviders(current => current.map(item => item.id === draft.id ? { ...toDraft(detected.provider ?? data.provider), apiKey: '', busy: false, notice: `已自动检测到 ${detected.models.length} 个模型` } : item))
-        } catch (caught) {
-          if (isUnauthorized(caught)) onUnauthorized?.()
-          setProviders(current => current.map(item => item.id === draft.id ? {
-            ...item,
-            ...data.provider,
-            id: savedId,
-            name: draft.name,
-            baseUrl: draft.baseUrl,
-            selectedModelIds: draft.selectedModelIds,
-            apiKey: draft.apiKey,
-            busy: false,
-            notice: '配置已保存，但自动检测失败',
-            error: caught instanceof Error ? caught.message : '模型检测失败',
-          } : item))
-        }
-      } else {
-        setProviders(current => current.map(item => item.id === draft.id ? { ...toDraft(data.provider), apiKey: '', busy: false } : item))
-      }
+      setProviders(current => current.map(item => item.id === draft.id
+        ? { ...toDraft(data.provider), apiKey: '', busy: false, notice: '配置已保存' }
+        : item))
       if (isDraft) onCountChange(providers.filter(item => !item.id.startsWith('draft-')).length + 1)
     } catch (caught) {
       if (isUnauthorized(caught)) onUnauthorized?.()
@@ -82,15 +63,14 @@ export function ProviderManager({ onCountChange, onUnauthorized }: { onCountChan
   const discover = async (draft: Draft) => {
     update(draft.id, { busy: true, error: '', notice: '正在检测 /models…' })
     try {
-      const data = draft.id.startsWith('draft-')
-        ? await providerFetch<DiscoveryResponse>('/providers/test', jsonBody({ baseUrl: draft.baseUrl, apiKey: draft.apiKey }))
-        : await providerFetch<DiscoveryResponse>(`/providers/${encodeURIComponent(draft.id)}/discover`, jsonBody({ baseUrl: draft.baseUrl, apiKey: draft.apiKey }))
+      const data = await providerFetch<DiscoveryResponse>('/providers/test', jsonBody({
+        id: draft.id.startsWith('draft-') ? undefined : draft.id,
+        baseUrl: draft.baseUrl,
+        apiKey: draft.apiKey || undefined,
+      }))
       setProviders(current => current.map(item => {
         if (item.id !== draft.id) return item
-        if (draft.id.startsWith('draft-')) {
-          return { ...item, models: data.models, busy: false, error: '', notice: `检测到 ${data.models.length} 个模型` }
-        }
-        return { ...item, ...(data.provider ?? {}), apiKey: '', busy: false, error: '', notice: `检测到 ${data.models.length} 个模型` }
+        return { ...item, models: data.models, busy: false, error: '', notice: `检测到 ${data.models.length} 个模型` }
       }))
     } catch (caught) {
       if (isUnauthorized(caught)) onUnauthorized?.()
@@ -110,7 +90,7 @@ export function ProviderManager({ onCountChange, onUnauthorized }: { onCountChan
   }
   const add = () => setProviders(current => [...current, blankProvider()])
 
-  return <><div className="page-head provider-head"><div><span className="eyebrow">Configuration / model access</span><h1>Providers<br /><em>your models, your route.</em></h1></div><Button variant="primary" onClick={add}>添加 provider <span>＋</span></Button></div>{globalError && <div className="alert">{globalError}</div>}<div className="provider-intro">把 API key 和兼容接口的 base URL 放在服务端配置中；前端只拿到掩码和模型列表。检测成功后勾选允许 Taste Trainer 使用的模型。</div>{loading ? <div className="loading-state">加载 providers…</div> : providers.length ? <div className="provider-grid">{providers.map((draft, index) => <ProviderCard key={draft.id || `new-${index}`} draft={draft} update={patch => update(draft.id, patch)} onSave={() => void save(draft)} onDiscover={() => void discover(draft)} onDelete={() => void remove(draft)} />)}</div> : <div className="empty provider-empty"><strong>还没有 provider</strong><span>添加一个 OpenAI-compatible endpoint，开始发现模型。</span><Button variant="primary" onClick={add}>添加第一个 provider</Button></div>}</>
+  return <><div className="page-head provider-head"><div><span className="eyebrow">Configuration / model access</span><h1>Providers<br /><em>your models, your route.</em></h1></div><Button variant="primary" onClick={add}>添加 provider <span>＋</span></Button></div>{globalError && <div className="alert">{globalError}</div>}<div className="provider-intro">把 API key 和兼容接口的 base URL 放在服务端配置中；先检测模型，再勾选允许 Taste Trainer 使用的模型，最后保存配置。</div>{loading ? <div className="loading-state">加载 providers…</div> : providers.length ? <div className="provider-grid">{providers.map((draft, index) => <ProviderCard key={draft.id || `new-${index}`} draft={draft} update={patch => update(draft.id, patch)} onSave={() => void save(draft)} onDiscover={() => void discover(draft)} onDelete={() => void remove(draft)} />)}</div> : <div className="empty provider-empty"><strong>还没有 provider</strong><span>添加一个 OpenAI-compatible endpoint，开始发现模型。</span><Button variant="primary" onClick={add}>添加第一个 provider</Button></div>}</>
 }
 
 function ProviderCard({ draft, update, onSave, onDiscover, onDelete }: { draft: Draft; update: (patch: Partial<Draft>) => void; onSave: () => void; onDiscover: () => void; onDelete: () => void }) {
@@ -150,8 +130,8 @@ function ProviderCard({ draft, update, onSave, onDiscover, onDelete }: { draft: 
     </div>
 
     <div className="provider-actions">
-      <Button variant="primary" disabled={draft.busy || !draft.name || !draft.baseUrl} onClick={onSave}>保存并检测</Button>
-      <Button disabled={draft.busy || !draft.baseUrl} onClick={onDiscover}>重新检测 <span>↗</span></Button>
+      <Button variant="primary" disabled={draft.busy || !draft.name || !draft.baseUrl} onClick={onSave}>保存配置</Button>
+      <Button disabled={draft.busy || !draft.baseUrl} onClick={onDiscover}>检测模型 <span>↗</span></Button>
     </div>
 
     {draft.notice && <p className="form-message form-message-success" role="status">✓ {draft.notice}</p>}
@@ -161,7 +141,7 @@ function ProviderCard({ draft, update, onSave, onDiscover, onDelete }: { draft: 
       <div className="models-head">
         <div>
           <span className="eyebrow">Available models</span>
-          <strong id={modelsId}>{draft.models.length ? `${draft.selectedModelIds.length} / ${draft.models.length} selected` : '保存后自动检测'}</strong>
+          <strong id={modelsId}>{draft.models.length ? `${draft.selectedModelIds.length} / ${draft.models.length} selected` : '点击检测模型获取列表'}</strong>
         </div>
         <div className="select-actions">
           <button className="select-button" type="button" aria-pressed={allSelected} onClick={() => setAll(true)} disabled={!draft.models.length}>全部</button>
@@ -174,9 +154,9 @@ function ProviderCard({ draft, update, onSave, onDiscover, onDelete }: { draft: 
         <span className="checkmark" aria-hidden="true">✓</span>
         <span className="model-name">{model.id}</span>
         {model.owned_by && <small>{model.owned_by}</small>}
-      </label>)}</div> : <div className="model-empty">模型列表将在服务端调用<br /><code>{draft.baseUrl.replace(/\/$/, '')}/models</code> 后出现。</div>}
+      </label>)}</div> : <div className="model-empty">点击“检测模型”调用<br /><code>{draft.baseUrl.replace(/\/$/, '')}/models</code> 获取模型。</div>}
 
-      <p className="provider-footnote">Selected models become <code>{draft.id || 'provider'}:model-id</code> in the AI SDK registry.</p>
+      <p className="provider-footnote">保存后可以在 Settings 中把已勾选的模型设为 Default model。</p>
     </section>
   </article>
 }
