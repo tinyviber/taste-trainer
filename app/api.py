@@ -6,6 +6,7 @@ import hmac
 import json
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -34,6 +35,7 @@ app = FastAPI(title="视频脚本训练服务")
 JOBS: dict[str, dict[str, dict]] = {}
 JOBS_LOCK = threading.Lock()
 USER_JOB_LOCKS: dict[str, threading.Lock] = {}
+USER_JOB_LOCK_REFS: dict[str, int] = {}
 USER_JOB_LOCKS_GUARD = threading.Lock()
 ACTIVE_SCOPES: set[tuple[str, str]] = set()
 ACTIVE_SCOPES_LOCK = threading.Lock()
@@ -112,9 +114,23 @@ def _user_settings(user: auth.User):
     )
 
 
-def _user_job_lock(user_id: str) -> threading.Lock:
+@contextmanager
+def _user_job_lock(user_id: str):
     with USER_JOB_LOCKS_GUARD:
-        return USER_JOB_LOCKS.setdefault(user_id, threading.Lock())
+        lock = USER_JOB_LOCKS.setdefault(user_id, threading.Lock())
+        USER_JOB_LOCK_REFS[user_id] = USER_JOB_LOCK_REFS.get(user_id, 0) + 1
+    try:
+        with lock:
+            yield
+    finally:
+        with USER_JOB_LOCKS_GUARD:
+            refs = USER_JOB_LOCK_REFS.get(user_id, 1) - 1
+            if refs > 0:
+                USER_JOB_LOCK_REFS[user_id] = refs
+            else:
+                USER_JOB_LOCK_REFS.pop(user_id, None)
+                if USER_JOB_LOCKS.get(user_id) is lock:
+                    USER_JOB_LOCKS.pop(user_id, None)
 
 
 def _update_job(user_id: str, job_id: str, **values) -> None:
@@ -350,8 +366,8 @@ async def settings_put(request: Request):
     )
 
 def _state_snapshot(user_id: str, user_settings) -> dict:
+    dirs = ws_dirs(user_settings.workspace, user_settings.training_assets_dir)
     with _user_job_lock(user_id):
-        dirs = ws_dirs(user_settings.workspace, user_settings.training_assets_dir)
         ex_records = []
         if dirs["exercises"].exists():
             for directory in sorted(dirs["exercises"].iterdir()):
@@ -365,7 +381,6 @@ def _state_snapshot(user_id: str, user_settings) -> dict:
              "status": metadata.get("status"), "score": metadata.get("score")}
             for _, metadata in ex_records
         ]
-        latest_dir = ex_records[-1][0] if ex_records else None
         videos = []
         for sub in ("videos", "inbox"):
             directory = dirs[sub] if sub == "inbox" else dirs["videos"]
@@ -375,14 +390,15 @@ def _state_snapshot(user_id: str, user_settings) -> dict:
                     for item in sorted(directory.iterdir())
                     if item.is_file() and not item.name.startswith(".")
                 ]
-        latest = exercises[-1] if exercises else None
-        submission = ""
-        micro_focus = None
-        if latest and latest["status"] == "prompted":
-            submission = read(dirs["exercises"] / latest["id"] / "submission.md")
-        if latest and latest["status"] == "needs_micro_revision":
-            micro_focus = load_meta(dirs["exercises"] / latest["id"]).get("micro_revision_focus")
-        documents = _read_exercise_documents(latest_dir)
+        latest_dir, latest_metadata = ex_records[-1] if ex_records else (None, {})
+    latest = exercises[-1] if exercises else None
+    submission = ""
+    micro_focus = None
+    if latest and latest["status"] == "prompted":
+        submission = read(dirs["exercises"] / latest["id"] / "submission.md")
+    if latest and latest["status"] == "needs_micro_revision":
+        micro_focus = latest_metadata.get("micro_revision_focus")
+    documents = _read_exercise_documents(latest_dir)
     with JOBS_LOCK:
         jobs_snapshot = dict(JOBS.get(user_id, {}))
     return {

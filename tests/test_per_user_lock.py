@@ -11,6 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
+from app.config import ws_dirs
+from app.renders import save_meta
+
 
 def _load_api_for_lock_tests(tempdir):
     """Import app.api with isolated settings without starting its server."""
@@ -102,6 +105,40 @@ class PerUserLockTests(unittest.TestCase):
                 self.assertEqual(first.result(timeout=2), "user-a")
         finally:
             release.set()
+
+    def test_lock_entry_is_removed_after_the_last_user_job(self):
+        user_id = "user-lock-cleanup"
+        self.assertNotIn(user_id, self.api.USER_JOB_LOCKS)
+        self.assertEqual(self._run_serial(user_id, lambda: "done"), "done")
+        self.assertNotIn(user_id, self.api.USER_JOB_LOCKS)
+        self.assertNotIn(user_id, self.api.USER_JOB_LOCK_REFS)
+
+    def test_state_snapshot_is_user_scoped(self):
+        user_a = self.api.auth.User(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "user-a"
+        )
+        user_b = self.api.auth.User(
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "user-b"
+        )
+        settings_a = self.api._user_settings(user_a)
+        settings_b = self.api._user_settings(user_b)
+        exercise_dir = ws_dirs(
+            settings_a.workspace, settings_a.training_assets_dir
+        )["exercises"] / "exercise-a"
+        exercise_dir.mkdir(parents=True)
+        save_meta(exercise_dir, {
+            "id": "exercise-a",
+            "title": "User A exercise",
+            "status": "prompted",
+            "created_at": "2026-01-01T00:00:00",
+        })
+
+        snapshot_a = self.api._state_snapshot(user_a.id, settings_a)
+        snapshot_b = self.api._state_snapshot(user_b.id, settings_b)
+
+        self.assertEqual([item["id"] for item in snapshot_a["exercises"]], ["exercise-a"])
+        self.assertEqual(snapshot_b["exercises"], [])
+        self.assertIsNone(snapshot_b["latest_exercise"])
 
 
 if __name__ == "__main__":

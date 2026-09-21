@@ -7,6 +7,7 @@ import { isIP } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { generateText } from 'ai'
 import { createConfiguredRegistry, type ProviderConfig } from './providers.js'
+import { createMutationQueue } from './mutation-queue.js'
 
 type ModelInfo = { id: string; owned_by?: string }
 type StoredProvider = ProviderConfig & {
@@ -27,10 +28,7 @@ const legacyConfigPath = process.env.PROVIDER_LEGACY_CONFIG_PATH ? resolve(proce
 const legacyUserId = process.env.PROVIDER_MIGRATION_USER_ID ?? ''
 const deleteLegacy = process.env.PROVIDER_DELETE_LEGACY === 'true'
 const encryptionKey = readEncryptionKey()
-// The queue covers the complete read -> modify -> write transaction.  Queuing
-// only saveProviders() would still allow two requests to calculate from the
-// same stale snapshot and lose one of the changes.
-const mutationQueues = new Map<string, Promise<void>>()
+const queueMutation = createMutationQueue()
 const INTERNAL_WINDOW_MS = 60_000
 const MAX_BODY_BYTES = 1_000_000
 
@@ -134,13 +132,6 @@ async function rotateEncryptedStores(oldKeyText: string) {
     await chmod(tempPath, 0o600)
     await rename(tempPath, path)
   }
-}
-
-function queueMutation<T>(userId: string, mutation: () => Promise<T>): Promise<T> {
-  const current = mutationQueues.get(userId) ?? Promise.resolve()
-  const next = current.catch(() => undefined).then(() => mutation())
-  mutationQueues.set(userId, next.then(() => undefined, () => undefined))
-  return next
 }
 
 async function migrateLegacy() {

@@ -92,6 +92,8 @@ run_checks() {
   npm run build --prefix "$ROOT_DIR/web"
   echo "== Provider build =="
   npm run build --prefix "$ROOT_DIR/provider-service"
+  echo "== Provider tests =="
+  npm test --prefix "$ROOT_DIR/provider-service"
   echo "== Checks passed =="
 }
 
