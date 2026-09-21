@@ -6,6 +6,7 @@ import hmac
 import json
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -29,17 +30,22 @@ settings = load_settings()
 auth.init_db(settings.auth_db_path)
 app = FastAPI(title="视频脚本训练服务")
 
-# One worker keeps the markdown/index mutation sequence deterministic.  Job
-# state is still keyed by the authenticated user so it cannot leak in /state.
+# A user-scoped lock keeps each user's markdown/index mutation sequence
+# deterministic while allowing independent users to run jobs concurrently.
 JOBS: dict[str, dict[str, dict]] = {}
-JOB_LOCK = threading.Lock()
+JOBS_LOCK = threading.Lock()
+USER_JOB_LOCKS: dict[str, threading.Lock] = {}
+USER_JOB_LOCK_REFS: dict[str, int] = {}
+USER_JOB_LOCKS_GUARD = threading.Lock()
 ACTIVE_SCOPES: set[tuple[str, str]] = set()
+ACTIVE_SCOPES_LOCK = threading.Lock()
 
 EXERCISE_DOCUMENTS = {
     "prompt": "prompt.md",
     "submission": "submission.md",
     "review": "review.md",
     "micro_revision": "micro_revision.md",
+    "micro_feedback": "micro_feedback.md",
     "revision": "revision.md",
 }
 
@@ -108,43 +114,69 @@ def _user_settings(user: auth.User):
     )
 
 
-def _jobs_for(user_id: str) -> dict[str, dict]:
-    return JOBS.setdefault(user_id, {})
+@contextmanager
+def _user_job_lock(user_id: str):
+    with USER_JOB_LOCKS_GUARD:
+        lock = USER_JOB_LOCKS.setdefault(user_id, threading.Lock())
+        USER_JOB_LOCK_REFS[user_id] = USER_JOB_LOCK_REFS.get(user_id, 0) + 1
+    try:
+        with lock:
+            yield
+    finally:
+        with USER_JOB_LOCKS_GUARD:
+            refs = USER_JOB_LOCK_REFS.get(user_id, 1) - 1
+            if refs > 0:
+                USER_JOB_LOCK_REFS[user_id] = refs
+            else:
+                USER_JOB_LOCK_REFS.pop(user_id, None)
+                if USER_JOB_LOCKS.get(user_id) is lock:
+                    USER_JOB_LOCKS.pop(user_id, None)
+
+
+def _update_job(user_id: str, job_id: str, **values) -> None:
+    with JOBS_LOCK:
+        JOBS.setdefault(user_id, {})[job_id].update(values)
 
 
 def _spawn(user: auth.User, user_settings, name: str, fn, *args,
            scope: str | None = None):
     scope_key = (user.id, scope) if scope else None
-    if scope_key and scope_key in ACTIVE_SCOPES:
-        raise HTTPException(409, "相同任务正在运行")
-    if scope_key:
-        ACTIVE_SCOPES.add(scope_key)
+    with ACTIVE_SCOPES_LOCK:
+        if scope_key and scope_key in ACTIVE_SCOPES:
+            raise HTTPException(409, "相同任务正在运行")
+        if scope_key:
+            ACTIVE_SCOPES.add(scope_key)
     job_id = f"{name}-{uuid4().hex[:12]}"
-    _jobs_for(user.id)[job_id] = {"status": "running", "detail": "", "started": time.time()}
-    user_dirs = ws_dirs(user_settings.workspace)
+    with JOBS_LOCK:
+        JOBS.setdefault(user.id, {})[job_id] = {
+            "status": "running", "detail": "", "started": time.time()
+        }
+    user_dirs = ws_dirs(user_settings.workspace, user_settings.training_assets_dir)
 
     async def runner():
         try:
-            meta = await asyncio.to_thread(_run_serial, fn, args)
-            _jobs_for(user.id)[job_id].update(
-                status="succeeded", detail=json.dumps(meta, ensure_ascii=False)[:400]
+            meta = await asyncio.to_thread(_run_serial, user.id, fn, args)
+            _update_job(
+                user.id, job_id, status="succeeded",
+                detail=json.dumps(meta, ensure_ascii=False)[:400]
             )
         except Exception as exc:  # noqa: BLE001 - stable client-facing status
-            _jobs_for(user.id)[job_id].update(status="failed", detail="任务失败，请查看服务日志")
+            _update_job(user.id, job_id, status="failed", detail="任务失败，请查看服务日志")
             try:
                 jobs._write_run(user_dirs, job_id, name, "failed", str(exc))
             except Exception:
                 pass
         finally:
             if scope_key:
-                ACTIVE_SCOPES.discard(scope_key)
+                with ACTIVE_SCOPES_LOCK:
+                    ACTIVE_SCOPES.discard(scope_key)
 
     asyncio.create_task(runner())
     return job_id
 
 
-def _run_serial(fn, args):
-    with JOB_LOCK:
+def _run_serial(user_id: str, fn, args):
+    with _user_job_lock(user_id):
         return fn(*args)
 
 
@@ -333,51 +365,59 @@ async def settings_put(request: Request):
         values["default_provider_id"], values["default_model_id"],
     )
 
-@app.get("/api/state")
-async def state(request: Request):
-    user = await _auth(request)
-    user_settings = _user_settings(user)
-    dirs = ws_dirs(user_settings.workspace)
-    ex_records = []
-    if dirs["exercises"].exists():
-        for directory in sorted(dirs["exercises"].iterdir()):
-            if directory.is_dir() and not directory.name.startswith("_"):
-                metadata = load_meta(directory)
-                if metadata.get("id"):
-                    ex_records.append((directory, metadata))
-    ex_records.sort(key=lambda item: item[1].get("created_at", item[1].get("id", item[0].name)))
-    exercises = [
-        {"id": metadata["id"], "title": metadata.get("title"),
-         "status": metadata.get("status"), "score": metadata.get("score")}
-        for _, metadata in ex_records
-    ]
-    latest_dir = ex_records[-1][0] if ex_records else None
-    videos = []
-    for sub in ("videos", "inbox"):
-        directory = dirs[sub] if sub == "inbox" else dirs["videos"]
-        if directory.exists():
-            videos += [
-                {"name": item.name, "inbox": sub == "inbox"}
-                for item in sorted(directory.iterdir())
-                if item.is_file() and not item.name.startswith(".")
-            ]
+def _state_snapshot(user_id: str, user_settings) -> dict:
+    dirs = ws_dirs(user_settings.workspace, user_settings.training_assets_dir)
+    with _user_job_lock(user_id):
+        ex_records = []
+        if dirs["exercises"].exists():
+            for directory in sorted(dirs["exercises"].iterdir()):
+                if directory.is_dir() and not directory.name.startswith("_"):
+                    metadata = load_meta(directory)
+                    if metadata.get("id"):
+                        ex_records.append((directory, metadata))
+        ex_records.sort(key=lambda item: item[1].get("created_at", item[1].get("id", item[0].name)))
+        exercises = [
+            {"id": metadata["id"], "title": metadata.get("title"),
+             "status": metadata.get("status"), "score": metadata.get("score")}
+            for _, metadata in ex_records
+        ]
+        videos = []
+        for sub in ("videos", "inbox"):
+            directory = dirs[sub] if sub == "inbox" else dirs["videos"]
+            if directory.exists():
+                videos += [
+                    {"name": item.name, "inbox": sub == "inbox"}
+                    for item in sorted(directory.iterdir())
+                    if item.is_file() and not item.name.startswith(".")
+                ]
+        latest_dir, latest_metadata = ex_records[-1] if ex_records else (None, {})
     latest = exercises[-1] if exercises else None
     submission = ""
     micro_focus = None
     if latest and latest["status"] == "prompted":
         submission = read(dirs["exercises"] / latest["id"] / "submission.md")
     if latest and latest["status"] == "needs_micro_revision":
-        micro_focus = load_meta(dirs["exercises"] / latest["id"]).get("micro_revision_focus")
+        micro_focus = latest_metadata.get("micro_revision_focus")
+    documents = _read_exercise_documents(latest_dir)
+    with JOBS_LOCK:
+        jobs_snapshot = dict(JOBS.get(user_id, {}))
     return {
         "latest_exercise": latest,
         "exercises": exercises[-5:],
         "videos": videos,
-        "jobs": dict(_jobs_for(user.id)),
+        "jobs": jobs_snapshot,
         "submission_template": submission,
         "micro_focus": micro_focus,
-        "documents": _read_exercise_documents(latest_dir),
+        "documents": documents,
         "a2h_url": "",
     }
+
+
+@app.get("/api/state")
+async def state(request: Request):
+    user = await _auth(request)
+    user_settings = _user_settings(user)
+    return await asyncio.to_thread(_state_snapshot, user.id, user_settings)
 
 
 @app.post("/api/exercise/new")
@@ -413,7 +453,7 @@ async def micro_revise(exercise_id: str, request: Request):
 async def analyze(request: Request, file: UploadFile | None = None):
     user = await _auth(request)
     user_settings = _user_settings(user)
-    dirs = ws_dirs(user_settings.workspace)
+    dirs = ws_dirs(user_settings.workspace, user_settings.training_assets_dir)
     if file is not None and file.filename:
         dirs["inbox"].mkdir(parents=True, exist_ok=True)
         original = Path(file.filename).name
@@ -447,13 +487,22 @@ async def analyze(request: Request, file: UploadFile | None = None):
 @app.get("/api/jobs")
 async def job_list(request: Request):
     user = await _auth(request)
-    return _jobs_for(user.id)
+    with JOBS_LOCK:
+        return dict(JOBS.get(user.id, {}))
+
+
+def _principles_snapshot(user_id: str, user_settings) -> dict:
+    with _user_job_lock(user_id):
+        return principles_state(
+            ws_dirs(user_settings.workspace, user_settings.training_assets_dir)
+        )
 
 
 @app.get("/api/principles")
 async def principles(request: Request):
     user = await _auth(request)
-    return principles_state(ws_dirs(_user_settings(user).workspace))
+    user_settings = _user_settings(user)
+    return await asyncio.to_thread(_principles_snapshot, user.id, user_settings)
 
 
 @app.post("/api/principles/{candidate_id}")
@@ -461,10 +510,11 @@ async def principle_action(candidate_id: str, request: Request):
     user = await _auth(request)
     body = await request.json()
     user_settings = _user_settings(user)
-    dirs = ws_dirs(user_settings.workspace)
+    dirs = ws_dirs(user_settings.workspace, user_settings.training_assets_dir)
     try:
         candidate = await asyncio.to_thread(
             _run_serial,
+            user.id,
             _update_principle_and_manifest,
             (dirs, user_settings.workspace, candidate_id, body.get("action", ""),
              body.get("title", ""), body.get("detail", "")),

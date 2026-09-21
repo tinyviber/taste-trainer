@@ -7,6 +7,7 @@ import { isIP } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { generateText } from 'ai'
 import { createConfiguredRegistry, type ProviderConfig } from './providers.js'
+import { createMutationQueue } from './mutation-queue.js'
 
 type ModelInfo = { id: string; owned_by?: string }
 type StoredProvider = ProviderConfig & {
@@ -27,7 +28,7 @@ const legacyConfigPath = process.env.PROVIDER_LEGACY_CONFIG_PATH ? resolve(proce
 const legacyUserId = process.env.PROVIDER_MIGRATION_USER_ID ?? ''
 const deleteLegacy = process.env.PROVIDER_DELETE_LEGACY === 'true'
 const encryptionKey = readEncryptionKey()
-const writeQueues = new Map<string, Promise<void>>()
+const queueMutation = createMutationQueue()
 const INTERNAL_WINDOW_MS = 60_000
 const MAX_BODY_BYTES = 1_000_000
 
@@ -131,13 +132,6 @@ async function rotateEncryptedStores(oldKeyText: string) {
     await chmod(tempPath, 0o600)
     await rename(tempPath, path)
   }
-}
-
-function queueSave(userId: string, providers: StoredProvider[]) {
-  const current = writeQueues.get(userId) ?? Promise.resolve()
-  const next = current.then(() => saveProviders(userId, providers))
-  writeQueues.set(userId, next.catch(() => undefined))
-  return next
 }
 
 async function migrateLegacy() {
@@ -336,12 +330,13 @@ function parseBody(body: Buffer): Record<string, unknown> {
 async function route(request: IncomingMessage, response: ServerResponse, userId: string, body: Buffer) {
   const url = new URL(request.url ?? '/', 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
-  const providers = await readProviders(userId)
   if (request.method === 'GET' && parts.length === 1 && parts[0] === 'providers') {
+    const providers = await readProviders(userId)
     return sendJson(response, 200, { providers: providers.map(publicProvider) })
   }
   if (request.method === 'POST' && parts.length === 2 && parts[0] === 'providers' && parts[1] === 'test') {
     const input = parseBody(body)
+    const providers = await readProviders(userId)
     const saved = typeof input.id === 'string' && input.id ? findProvider(providers, input.id) : undefined
     const baseUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim()
       ? normalizeBaseUrl(input.baseUrl)
@@ -356,60 +351,73 @@ async function route(request: IncomingMessage, response: ServerResponse, userId:
   }
   if (request.method === 'POST' && parts.length === 1 && parts[0] === 'providers') {
     const input = parseBody(body)
-    const existing = typeof input.id === 'string' && input.id ? providers.find(item => item.id === input.id) : undefined
-    const id = existing?.id ?? randomBytes(16).toString('hex')
-    const baseUrl = normalizeBaseUrl(requireText(input.baseUrl, 'base URL'))
-    const submittedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
-    if (existing && existing.baseUrl !== baseUrl && !submittedKey) {
-      throw new Error('修改 base URL 后必须重新填写 API key')
-    }
-    const models = Array.isArray(input.models) ? normalizeModels(input.models) : existing?.models ?? []
-    const modelIds = new Set(models.map(model => model.id))
-    await assertSafeUrl(baseUrl)
-    const provider: StoredProvider = {
-      id,
-      name: requireText(input.name, 'provider name'),
-      baseUrl,
-      apiKey: submittedKey || existing?.apiKey || '',
-      models,
-      selectedModelIds: Array.isArray(input.selectedModelIds)
-        ? [...new Set(input.selectedModelIds.filter((item): item is string => typeof item === 'string' && modelIds.has(item)))]
-        : existing?.selectedModelIds ?? [],
-      selectionInitialized: Array.isArray(input.selectedModelIds) || (existing?.selectionInitialized ?? false),
-      lastDiscoveryAt: existing?.lastDiscoveryAt,
-    }
-    const next = existing ? providers.map(item => item.id === id ? provider : item) : [...providers, provider]
-    await queueSave(userId, next)
-    return sendJson(response, 200, { provider: publicProvider(provider) })
+    return queueMutation(userId, async () => {
+      const providers = await readProviders(userId)
+      const existing = typeof input.id === 'string' && input.id
+        ? providers.find(item => item.id === input.id) : undefined
+      const id = existing?.id ?? randomBytes(16).toString('hex')
+      const baseUrl = normalizeBaseUrl(requireText(input.baseUrl, 'base URL'))
+      const submittedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
+      if (existing && existing.baseUrl !== baseUrl && !submittedKey) {
+        throw new Error('修改 base URL 后必须重新填写 API key')
+      }
+      const models = Array.isArray(input.models) ? normalizeModels(input.models) : existing?.models ?? []
+      const modelIds = new Set(models.map(model => model.id))
+      await assertSafeUrl(baseUrl)
+      const provider: StoredProvider = {
+        id,
+        name: requireText(input.name, 'provider name'),
+        baseUrl,
+        apiKey: submittedKey || existing?.apiKey || '',
+        models,
+        selectedModelIds: Array.isArray(input.selectedModelIds)
+          ? [...new Set(input.selectedModelIds.filter((item): item is string => typeof item === 'string' && modelIds.has(item)))]
+          : existing?.selectedModelIds ?? [],
+        selectionInitialized: Array.isArray(input.selectedModelIds) || (existing?.selectionInitialized ?? false),
+        lastDiscoveryAt: existing?.lastDiscoveryAt,
+      }
+      const next = existing ? providers.map(item => item.id === id ? provider : item) : [...providers, provider]
+      await saveProviders(userId, next)
+      return sendJson(response, 200, { provider: publicProvider(provider) })
+    })
   }
 
   if (parts[0] !== 'providers') return sendJson(response, 404, { error: 'not found' })
-  const provider = findProvider(providers, parts[1] ?? '')
   if (request.method === 'DELETE' && parts.length === 2) {
-    await queueSave(userId, providers.filter(item => item.id !== provider.id))
-    return sendJson(response, 200, { ok: true })
+    return queueMutation(userId, async () => {
+      const providers = await readProviders(userId)
+      const provider = findProvider(providers, parts[1] ?? '')
+      await saveProviders(userId, providers.filter(item => item.id !== provider.id))
+      return sendJson(response, 200, { ok: true })
+    })
   }
   if (request.method === 'POST' && parts.length === 3 && parts[2] === 'discover') {
     const input = parseBody(body)
-    const submittedBaseUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim()
-      ? normalizeBaseUrl(input.baseUrl) : provider.baseUrl
-    const submittedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
-    if (submittedBaseUrl !== provider.baseUrl && !submittedKey) {
-      throw new Error('修改 base URL 后必须重新填写 API key')
-    }
-    const apiKey = submittedKey || provider.apiKey
-    const models = await discover(submittedBaseUrl, apiKey)
-    const known = new Set(models.map(model => model.id))
-    const selected = provider.selectionInitialized
-      ? provider.selectedModelIds.filter(id => known.has(id)) : models.map(model => model.id)
-    const nextProvider = {
-      ...provider, baseUrl: submittedBaseUrl, apiKey, models,
-      selectedModelIds: selected, selectionInitialized: true,
-      lastDiscoveryAt: new Date().toISOString(),
-    }
-    await queueSave(userId, providers.map(item => item.id === provider.id ? nextProvider : item))
-    return sendJson(response, 200, { provider: publicProvider(nextProvider), models })
+    return queueMutation(userId, async () => {
+      const providers = await readProviders(userId)
+      const provider = findProvider(providers, parts[1] ?? '')
+      const submittedBaseUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim()
+        ? normalizeBaseUrl(input.baseUrl) : provider.baseUrl
+      const submittedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
+      if (submittedBaseUrl !== provider.baseUrl && !submittedKey) {
+        throw new Error('修改 base URL 后必须重新填写 API key')
+      }
+      const apiKey = submittedKey || provider.apiKey
+      const models = await discover(submittedBaseUrl, apiKey)
+      const known = new Set(models.map(model => model.id))
+      const selected = provider.selectionInitialized
+        ? provider.selectedModelIds.filter(id => known.has(id)) : models.map(model => model.id)
+      const nextProvider = {
+        ...provider, baseUrl: submittedBaseUrl, apiKey, models,
+        selectedModelIds: selected, selectionInitialized: true,
+        lastDiscoveryAt: new Date().toISOString(),
+      }
+      await saveProviders(userId, providers.map(item => item.id === provider.id ? nextProvider : item))
+      return sendJson(response, 200, { provider: publicProvider(nextProvider), models })
+    })
   }
+  const providers = await readProviders(userId)
+  const provider = findProvider(providers, parts[1] ?? '')
   if (request.method === 'POST' && parts.length === 3 && parts[2] === 'completions') {
     const input = parseBody(body)
     const modelId = requireText(input.model, 'modelId')

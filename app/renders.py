@@ -24,6 +24,12 @@ def read(path: Path, default: str = "") -> str:
     return path.read_text(encoding="utf-8") if path.exists() else default
 
 
+def read_required(path: Path, label: str) -> str:
+    if not path.is_file():
+        raise RuntimeError(f"缺少{label}：{path}")
+    return path.read_text(encoding="utf-8")
+
+
 def load_meta(path: Path) -> dict:
     p = path / "meta.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
@@ -140,6 +146,30 @@ def render_revision_md(d: dict, title: str) -> str:
 | 环节 | v1 原方案 | v2 改动 | 为什么 |
 |---|---|---|---|
 {changes}
+"""
+
+
+def render_micro_feedback(d: dict, title: str) -> str:
+    return f"""# Micro-v2 feedback
+
+> 题目：{title}
+
+## 目标维度：{d.get('target_dim', '—')}
+
+- v1：{d.get('v1_score', '—')}/10
+- 估计目标：{d.get('v1_score', '—')}/10 → {d.get('estimated_score', '—')}/10
+
+### ✓ 修复了什么
+
+{d.get('fixed', '')}
+
+### △ 仍然缺什么
+
+{d.get('remaining_gap', '')}
+
+### → 如果再改一次，只改这一点
+
+{d.get('next_step', '')}
 """
 
 

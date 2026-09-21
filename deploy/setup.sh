@@ -4,6 +4,7 @@ set -euo pipefail
 
 SERVICE_DIR="${1:-/srv/video-trainer/service}"   # 本仓库部署位置
 WORKSPACE_DIR="${2:-$SERVICE_DIR/workspace}" # 项目目录内的数据目录
+TRAINING_ASSETS_DIR="${TRAINING_ASSETS_DIR:-$SERVICE_DIR/training-assets}"
 
 # 1) 系统依赖
 apt-get update
@@ -75,7 +76,16 @@ python3 -m venv "$SERVICE_DIR/.venv"
 "$SERVICE_DIR/.venv/bin/pip" install -r "$SERVICE_DIR/requirements.txt"
 
 # 3) 数据目录骨架
-mkdir -p "$WORKSPACE_DIR"/{videos/inbox,runs,analyses,exercises/_template,.a2h/runs}
+for required in \
+  "$TRAINING_ASSETS_DIR/RUBRIC.md" \
+  "$TRAINING_ASSETS_DIR/PROMPT_POOL.md" \
+  "$TRAINING_ASSETS_DIR/submission-template.md"; do
+  if [[ ! -f "$required" ]]; then
+    echo "training asset missing: $required" >&2
+    exit 1
+  fi
+done
+mkdir -p "$WORKSPACE_DIR/users"
 install -d -m 0700 /srv/video-trainer/provider-data
 
 # 4) React dashboard + AI SDK provider service

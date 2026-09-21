@@ -49,8 +49,10 @@ class CoreInvariantTests(unittest.TestCase):
             manifest_path = manifest.regenerate(ws, dirs)
             self.assertIn("analyses/PRINCIPLES.md", manifest_path.read_text(encoding="utf-8"))
             update_candidate(dirs, "video-1-p1", "reject")
-            self.assertEqual(len(state(dirs)["accepted"]), 0)
-            self.assertNotIn("先给承诺", dirs["principles"].read_text(encoding="utf-8"))
+            rejected = state(dirs)
+            active = rejected.get("active", rejected["accepted"])
+            self.assertEqual(len(active), 0)
+            self.assertEqual(rejected["candidates"][0]["status"], "rejected")
 
     def test_safe_child_rejects_escape(self):
         with tempfile.TemporaryDirectory() as temp:

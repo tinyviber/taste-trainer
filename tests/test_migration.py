@@ -9,16 +9,29 @@ from scripts.migrate_legacy_workspace import migrate
 class LegacyMigrationTests(unittest.TestCase):
     user_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
-    def test_dry_run_and_copy_exclude_plaintext_provider_file(self):
+    def test_migration_preserves_runs_but_excludes_shared_assets_and_template(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "videos").mkdir()
             (root / "videos" / "clip.mp4").write_bytes(b"video")
+            (root / "exercises" / "2026-01-01-example").mkdir(parents=True)
+            (root / "exercises" / "2026-01-01-example" / "meta.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            (root / "exercises" / "_template").mkdir(parents=True)
+            (root / "exercises" / "_template" / "submission.md").write_text(
+                "shared template", encoding="utf-8"
+            )
             (root / ".a2h").mkdir()
+            (root / ".a2h" / "runs").mkdir()
+            (root / ".a2h" / "runs" / "old-job.json").write_text(
+                '{"runs": []}', encoding="utf-8"
+            )
             (root / ".a2h" / "providers.json").write_text(
                 json.dumps([{"apiKey": "must-not-copy"}]), encoding="utf-8"
             )
             (root / "RUBRIC.md").write_text("rubric", encoding="utf-8")
+            (root / "PROMPT_POOL.md").write_text("pool", encoding="utf-8")
 
             report = migrate(root, self.user_id, dry_run=True)
             self.assertTrue(report["dry_run"])
@@ -30,7 +43,14 @@ class LegacyMigrationTests(unittest.TestCase):
             migrate(root, self.user_id)
             target = root / "users" / self.user_id
             self.assertEqual((target / "videos" / "clip.mp4").read_bytes(), b"video")
-            self.assertEqual((target / "RUBRIC.md").read_text(), "rubric")
+            self.assertTrue((target / "exercises" / "2026-01-01-example" / "meta.json").exists())
+            self.assertEqual(
+                (target / ".a2h" / "runs" / "old-job.json").read_text(),
+                '{"runs": []}',
+            )
+            self.assertFalse((target / "exercises" / "_template").exists())
+            self.assertFalse((target / "RUBRIC.md").exists())
+            self.assertFalse((target / "PROMPT_POOL.md").exists())
             self.assertFalse((target / ".a2h" / "providers.json").exists())
             self.assertFalse((root / ".a2h" / "providers.json").exists())
 
