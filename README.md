@@ -100,8 +100,10 @@ sudo systemctl enable --now trainer-api provider-service a2h-view
 | GET | `/api/principles` | 查看原则候选与已接受原则 |
 | POST | `/api/principles/{candidate_id}` | 接受、修改后接受或拒绝候选 |
 
-设了 `API_TOKEN` 后 API 请求需带 `X-Token`；浏览器可首次用 `/?token=...`
-引导，服务会立即跳回无 token 的 URL 并写入 HttpOnly cookie。
+设了 `API_TOKEN` 后 API 请求需带 `X-Token`；生产环境浏览器可首次用 `/?token=...`
+引导，服务会立即跳回无 token 的 URL 并写入 HttpOnly cookie。直接运行 Vite 开发服务时，
+Vite proxy 会从根目录 `.env` 在服务端补上 header；也可打开
+`http://127.0.0.1:5173/?token=...`，由前端补上 header 并移除 URL 中的 token。
 
 ## 数据约定（工作区侧）
 

@@ -1,5 +1,23 @@
+const bootstrapToken = readBootstrapToken()
+
+function readBootstrapToken() {
+  const url = new URL(window.location.href)
+  const token = url.searchParams.get('token') ?? ''
+  if (token) {
+    url.searchParams.delete('token')
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+  return token
+}
+
+function requestHeaders(init?: RequestInit) {
+  const headers = new Headers(init?.headers)
+  if (bootstrapToken && !headers.has('X-Token')) headers.set('X-Token', bootstrapToken)
+  return headers
+}
+
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, credentials: 'include' })
+  const response = await fetch(url, { ...init, headers: requestHeaders(init), credentials: 'include' })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
     throw new Error(data.detail ?? data.error ?? '请求失败')

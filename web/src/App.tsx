@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiFetch, jsonBody } from './api'
+import { apiFetch, jsonBody, providerFetch } from './api'
 import type { Exercise, Job, Principle, PrinciplesState, TrainerState, Video } from './types'
 import { ProviderManager } from './components/ProviderManager'
 
@@ -186,7 +186,7 @@ function PrincipleCard({ candidate, busy, onAction }: { candidate: Principle; bu
 export default function App() {
   const [view, setView] = useState<View>(() => window.location.hash === '#providers' ? 'providers' : 'practice')
   const [providerCount, setProviderCount] = useState(0)
-  useEffect(() => { void fetch(`${import.meta.env.VITE_PROVIDER_API_URL ?? '/provider-api'}/providers`, { credentials: 'include' }).then(response => response.ok ? response.json() : null).then(data => setProviderCount(data?.providers?.length ?? 0)).catch(() => undefined) }, [view])
+  useEffect(() => { void providerFetch<{ providers: unknown[] }>('/providers').then(data => setProviderCount(data.providers.length)).catch(() => undefined) }, [view])
   const navigate = (next: View) => { window.history.replaceState(null, '', next === 'providers' ? '#providers' : '#practice'); setView(next) }
   return <div className="app-shell"><aside className="sidebar"><div className="brand">Taste<br /><span>Trainer</span></div><p className="tagline">TRAIN YOUR PALATE<br />ONE VIDEO AT A TIME.</p><nav><button className={view === 'practice' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('practice')}><span>◉</span>Practice</button><button className="nav-item" onClick={() => navigate('practice')}><span>▱</span>Library</button><button className={view === 'providers' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('providers')}><span>◌</span>Providers {providerCount > 0 && <b>{providerCount}</b>}</button></nav><div className="sidebar-foot">BETTER COOKS<br />TASTE MORE.</div></aside><main className="main-content">{view === 'practice' ? <PracticeView /> : <ProviderManager onCountChange={setProviderCount} />}</main></div>
 }
