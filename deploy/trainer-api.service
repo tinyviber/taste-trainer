@@ -1,15 +1,20 @@
 [Unit]
-Description=video-script-trainer API
+Description=Taste Trainer authenticated API
 After=network.target
 
 [Service]
 WorkingDirectory=/srv/video-trainer/service
-EnvironmentFile=/srv/video-trainer/service/.env
-ExecStart=/srv/video-trainer/service/.venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8421
+EnvironmentFile=/etc/taste-trainer/api.env
+ExecStart=/srv/video-trainer/service/.venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8421 --workers 1
 Restart=on-failure
 RestartSec=3
-User=videotrainer
-Group=videotrainer
+User=videotrainer-api
+Group=videotrainer-api
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/video-trainer/workspace
 
 [Install]
 WantedBy=multi-user.target

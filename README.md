@@ -21,7 +21,8 @@ LLM 不手改结构化文件。每次任务还会写 `.a2h/runs/<job>.json`，�
 ```
 service/
 ├── app/
-│   ├── api.py        FastAPI 业务 API + React 静态文件入口
+│   ├── api.py        FastAPI 认证、用户隔离 API + React 静态文件入口
+│   ├── auth.py       SQLite session/password auth（无公开注册）
 │   ├── jobs.py       三个 LLM 任务
 │   ├── llm.py        OpenAI-compatible 客户端（chat_json + 视觉图传）
 │   ├── pipeline.py   ffmpeg 抽帧/拼图
@@ -31,7 +32,7 @@ service/
 │   ├── schemas.py    LLM 评分 JSON 校验与归一化
 │   └── prompts/      每个任务的 system prompt（{{var}} 占位符）
 ├── web/              Vite + React + TypeScript 仪表盘
-└── provider-service/ Node AI SDK provider registry 与模型发现服务
+└── provider-service/ Node AI SDK provider registry 与加密模型发现服务
 ├── deploy/           setup.sh + systemd 单元
 └── scripts/          rsync-data.sh.example
 ```
@@ -44,7 +45,9 @@ bash scripts/local.sh
 
 脚本会把数据放在项目根目录的 `workspace/`（也可通过环境变量
 `WORKSPACE_DIR` 覆盖），自动准备依赖、运行测试和构建，然后启动 API、Provider
-和 React；A2H 已安装时也会一并启动。打开 http://127.0.0.1:5173 出题/提交/上传分析。
+和 React。首次使用需在 `.env` 填入随机的 `PROVIDER_INTERNAL_SECRET` 和
+`PROVIDER_ENCRYPTION_KEY`，再用 `python -m app.auth create-wj` 创建唯一账号。
+打开 http://127.0.0.1:5173 登录后出题/提交/上传分析。
 题目全文、提交内容、评分意见、
 micro-v2 和完整 revision 都会直接显示在 React 页面；A2H 只作为可选的工作区深度
 浏览器。评审后先完成一个 micro-v2，再展开 LLM 生成的完整 revision；视频分析产生
@@ -65,25 +68,38 @@ Vite + React + TypeScript：React 只负责界面和交互，Python FastAPI 继�
 
 `provider-service/` 使用 Vercel AI SDK 的
 `@ai-sdk/openai-compatible` 封装自定义 `baseURL` 的 provider，并用
-`createProviderRegistry` 管理多个 provider。Providers 页面保存 name/base URL/API
-key 到 `WORKSPACE_DIR/.a2h/providers.json`（权限 0600），浏览器只收到掩码状态和
-模型列表。点击“检测模型”会由服务端请求 `<baseURL>/models`，勾选项会限制可用的
-`providerId:modelId`；“全部/取消全部”只修改当前 provider 的允许模型集合。
+`createProviderRegistry` 管理多个 provider。浏览器只收到掩码状态和模型列表。
+浏览器访问的是同源 `/api/provider-api/*`；FastAPI 验证 session/CSRF 后，通过带
+时间戳、nonce 和 body 签名的本机通道调用 Node。Provider 数据按用户写入 AES-GCM
+加密文件，密钥只放部署侧的 provider secret 文件。检测失败后可以修改 key/base URL
+并直接重新检测，不需要刷新。
+轮换密钥时停掉 provider service，备份加密目录后生成新 key，并以
+`PROVIDER_ENCRYPTION_KEY=<new> PROVIDER_ROTATE_FROM_KEY=<old> node dist/server.js`
+运行一次；成功后只保留新 key，再启动服务。
 
 生产环境需要 Node.js 22 LTS 或更高版本（`provider-service` 的 AI SDK 7 和 Vite 7
 都依赖它）。先构建 `web` 和 `provider-service`，FastAPI 会提供 `web/dist`；把
-`deploy/nginx.conf.example` 中的 `/provider-api/` 反向代理配置加入 Nginx，
+`deploy/nginx.conf.example` 中的 FastAPI 反向代理配置加入 Nginx（不要公开 Node
+provider 端口），
 并确保 `client_max_body_size` 不小于 `.env` 的 `MAX_UPLOAD_MB`，再启用
-`trainer-api`、`provider-service` 和 `a2h-view`。
+`trainer-api`、`provider-service`。不要启用共享的 `a2h-view`。
 
 ## VPS 部署
 
 ```bash
 git clone <repo> /srv/video-trainer/service
 sudo bash /srv/video-trainer/service/deploy/setup.sh
-# 默认 workspace 是 /srv/video-trainer/service/workspace；配 .env → rsync 数据 → 装 systemd 单元
-sudo cp deploy/*.service /etc/systemd/system/  # 改路径/用户
-sudo systemctl enable --now trainer-api provider-service a2h-view
+# 默认 workspace 是 /srv/video-trainer/service/workspace；准备两个 0600 env 文件：
+# /etc/taste-trainer/api.env 与 /etc/taste-trainer/provider.env
+sudo cp deploy/*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now trainer-api provider-service
+
+# 停服务后，先 dry-run，再把旧单用户 workspace 迁移到 wj 的 UUID 目录。
+sudo -u videotrainer-api /srv/video-trainer/service/.venv/bin/python -m app.auth create-wj
+sudo -u videotrainer-api /srv/video-trainer/service/.venv/bin/python \
+  scripts/migrate_legacy_workspace.py --root /srv/video-trainer/service/workspace \
+  --user-id '<wj UUID>' --dry-run
 ```
 
 ## 接口速查
@@ -99,11 +115,15 @@ sudo systemctl enable --now trainer-api provider-service a2h-view
 | GET | `/api/jobs` | 任务状态 |
 | GET | `/api/principles` | 查看原则候选与已接受原则 |
 | POST | `/api/principles/{candidate_id}` | 接受、修改后接受或拒绝候选 |
+| POST | `/api/auth/login` | 登录（唯一账号由本机 CLI 创建） |
+| POST | `/api/auth/change-password` | 修改密码并撤销旧 session |
+| POST | `/api/auth/logout` | 注销当前 session |
+| GET | `/api/provider-api/providers` | 当前用户的 provider（不含 API key） |
 
-设了 `API_TOKEN` 后 API 请求需带 `X-Token`；生产环境浏览器可首次用 `/?token=...`
-引导，服务会立即跳回无 token 的 URL 并写入 HttpOnly cookie。直接运行 Vite 开发服务时，
-Vite proxy 会从根目录 `.env` 在服务端补上 header；也可打开
-`http://127.0.0.1:5173/?token=...`，由前端补上 header 并移除 URL 中的 token。
+认证入口为 `/api/auth/login`、`/api/auth/me`、`/api/auth/logout` 和
+`/api/auth/change-password`；没有注册接口。密码 hash、session hash 和用户 ID 存在
+SQLite，训练数据存放于 `WORKSPACE_DIR/users/<user-uuid>/`。旧的 `API_TOKEN`、
+`X-Token`、query token 和公网 `/provider-api/` 都不再是认证旁路。
 
 ## 数据约定（工作区侧）
 

@@ -57,37 +57,44 @@ if [[ ! -x "$NPM_BIN" ]]; then
   exit 1
 fi
 
-# Run both services as a dedicated unprivileged account.
-if ! id -u videotrainer >/dev/null 2>&1; then
-  useradd --system --home-dir /srv/video-trainer --create-home \
-    --shell /usr/sbin/nologin videotrainer
+# Run the two services as separate unprivileged accounts.  The API account
+# can read training data; the provider account can read only encrypted provider
+# data and its own secret file.
+if ! id -u videotrainer-api >/dev/null 2>&1; then
+  useradd --system --home-dir /srv/video-trainer --no-create-home \
+    --shell /usr/sbin/nologin videotrainer-api
 fi
+if ! id -u videotrainer-provider >/dev/null 2>&1; then
+  useradd --system --home-dir /srv/video-trainer --no-create-home \
+    --shell /usr/sbin/nologin videotrainer-provider
+fi
+install -d -m 0700 /etc/taste-trainer
 
-# 2) a2h 查看器
-"$NPM_BIN" install -g @tinyviber/a2h
-command -v a2h >/dev/null 2>&1 || {
-  echo "a2h installation failed: command not found" >&2
-  exit 1
-}
-
-# 3) python 环境
+# 2) python 环境
 python3 -m venv "$SERVICE_DIR/.venv"
 "$SERVICE_DIR/.venv/bin/pip" install -r "$SERVICE_DIR/requirements.txt"
 
-# 4) 数据目录骨架
+# 3) 数据目录骨架
 mkdir -p "$WORKSPACE_DIR"/{videos/inbox,runs,analyses,exercises/_template,.a2h/runs}
+install -d -m 0700 /srv/video-trainer/provider-data
 
-# 5) React dashboard + AI SDK provider service
+# 4) React dashboard + AI SDK provider service
 "$NPM_BIN" ci --prefix "$SERVICE_DIR/provider-service"
 "$NPM_BIN" run build --prefix "$SERVICE_DIR/provider-service"
 "$NPM_BIN" ci --prefix "$SERVICE_DIR/web"
 "$NPM_BIN" run build --prefix "$SERVICE_DIR/web"
 
-chown -R videotrainer:videotrainer "$SERVICE_DIR" "$WORKSPACE_DIR"
+# Code and virtualenv are read-only to both service accounts.  Runtime data
+# gets the narrow write permissions each service actually needs.
+chown -R root:root "$SERVICE_DIR"
+chown -R videotrainer-api:videotrainer-api "$WORKSPACE_DIR"
+chown -R videotrainer-provider:videotrainer-provider /srv/video-trainer/provider-data
 
 echo ""
 echo "完成。下一步："
 echo "  1. cp $SERVICE_DIR/.env.example $SERVICE_DIR/.env 并填写"
 echo "     WORKSPACE_DIR=$WORKSPACE_DIR"
-echo "  2. 把本地数据 rsync 到 $WORKSPACE_DIR（见 scripts/rsync-data.sh.example）"
-echo "  3. 安装 systemd 单元（deploy/*.service，改路径和用户）"
+echo "  2. 参考 deploy/api.env.example 和 provider.env.example 创建 /etc/taste-trainer/*.env（权限 0600）"
+echo "  3. 运行 python -m app.auth create-wj，记录一次性密码"
+echo "  4. 先 dry-run 再迁移旧 workspace；不要启用 a2h-view"
+echo "  5. 安装 systemd 单元（deploy/*.service）并配置 nginx 只代理 FastAPI"

@@ -1,15 +1,21 @@
 [Unit]
-Description=Taste Trainer AI SDK provider service
-After=network.target
+Description=Taste Trainer encrypted provider service
+After=network.target trainer-api.service
+Requires=trainer-api.service
 
 [Service]
 WorkingDirectory=/srv/video-trainer/service/provider-service
-EnvironmentFile=/srv/video-trainer/service/.env
+EnvironmentFile=/etc/taste-trainer/provider.env
 ExecStart=/usr/bin/node /srv/video-trainer/service/provider-service/dist/server.js
 Restart=on-failure
 RestartSec=3
-User=videotrainer
-Group=videotrainer
+User=videotrainer-provider
+Group=videotrainer-provider
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/video-trainer/provider-data
 
 [Install]
 WantedBy=multi-user.target

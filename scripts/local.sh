@@ -31,10 +31,19 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 # Keep the low-friction project-local default when .env leaves it unset.
 export WORKSPACE_DIR="${WORKSPACE_DIR:-$ROOT_DIR/workspace}"
+export PROVIDER_DATA_DIR="${PROVIDER_DATA_DIR:-$WORKSPACE_DIR/.provider-data}"
 
 if [[ "$MODE" == "start" ]]; then
   if [[ -z "${LLM_API_KEY:-}" || "$LLM_API_KEY" == "sk-xxx" ]]; then
     echo "请先在 $ENV_FILE 填写 LLM_API_KEY。" >&2
+    exit 1
+  fi
+  if [[ -z "${PROVIDER_INTERNAL_SECRET:-}" || "$PROVIDER_INTERNAL_SECRET" == "replace-with-a-random-32-byte-secret" ]]; then
+    echo "请先在 $ENV_FILE 填写 PROVIDER_INTERNAL_SECRET。" >&2
+    exit 1
+  fi
+  if [[ -z "${PROVIDER_ENCRYPTION_KEY:-}" || "$PROVIDER_ENCRYPTION_KEY" == "replace-with-base64-32-byte-key" ]]; then
+    echo "请先在 $ENV_FILE 填写 PROVIDER_ENCRYPTION_KEY（openssl rand -base64 32）。" >&2
     exit 1
   fi
 
@@ -125,12 +134,6 @@ start_process() {
 start_process api "$VENV_DIR/bin/python" -m uvicorn app.api:app \
   --host 127.0.0.1 --port "${API_PORT:-8421}"
 start_process provider npm run dev --prefix "$ROOT_DIR/provider-service"
-
-if command -v a2h >/dev/null 2>&1; then
-  start_process a2h a2h render "$WORKSPACE_DIR" --watch --port 8420
-else
-  echo "未找到 a2h，跳过可选 A2H viewer。"
-fi
 
 start_process web npm run dev --prefix "$ROOT_DIR/web" -- --host 127.0.0.1
 

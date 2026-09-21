@@ -14,13 +14,16 @@ DEFAULT_WORKSPACE = PROJECT_ROOT / "workspace"
 @dataclass
 class Settings:
     workspace: Path
+    auth_db_path: Path
     llm_base_url: str
     llm_api_key: str
     llm_model: str
     llm_vision_model: str
     api_port: int = 8421
-    a2h_url: str = "http://localhost:8420"
-    api_token: str = ""
+    a2h_url: str = ""
+    provider_service_url: str = "http://127.0.0.1:8765"
+    provider_internal_secret: str = ""
+    web_origins: tuple[str, ...] = ()
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     max_upload_mb: int = 1024
@@ -30,6 +33,8 @@ class Settings:
 def load_settings() -> Settings:
     ws = os.environ.get("WORKSPACE_DIR", "").strip()
     workspace = Path(ws).expanduser().resolve() if ws else DEFAULT_WORKSPACE
+    auth_db = os.environ.get("AUTH_DB_PATH", "").strip()
+    auth_db_path = Path(auth_db).expanduser().resolve() if auth_db else workspace / "auth.sqlite3"
     base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
     key = os.environ.get("LLM_API_KEY", "")
     if not key:
@@ -37,13 +42,23 @@ def load_settings() -> Settings:
     model = os.environ.get("LLM_MODEL", "gpt-4o")
     return Settings(
         workspace=workspace,
+        auth_db_path=auth_db_path,
         llm_base_url=base,
         llm_api_key=key,
         llm_model=model,
         llm_vision_model=os.environ.get("LLM_VISION_MODEL", model),
         api_port=int(os.environ.get("API_PORT", "8421")),
-        a2h_url=os.environ.get("A2H_URL", "http://localhost:8420"),
-        api_token=os.environ.get("API_TOKEN", ""),
+        # A2H is intentionally disabled as a shared public viewer.  A future
+        # per-user viewer must be explicitly opted into by the application.
+        a2h_url="",
+        provider_service_url=os.environ.get("PROVIDER_SERVICE_URL", "http://127.0.0.1:8765").rstrip("/"),
+        provider_internal_secret=os.environ.get("PROVIDER_INTERNAL_SECRET", ""),
+        web_origins=tuple(
+            origin.strip().rstrip("/")
+            for origin in os.environ.get(
+                "WEB_ORIGINS", os.environ.get("WEB_ORIGIN", "http://127.0.0.1:5173")
+            ).split(",") if origin.strip()
+        ),
         ffmpeg=os.environ.get("FFMPEG_BIN", "ffmpeg"),
         ffprobe=os.environ.get("FFPROBE_BIN", "ffprobe"),
         max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", "1024")),

@@ -12,7 +12,8 @@ rsync -avz --progress \
   --exclude 'service/' \
   --exclude 'runs/' \
   --exclude 'videos/inbox/' \
+  --exclude '.a2h/providers.json' \
   --exclude '.DS_Store' \
   "$LOCAL_WS/" "$VPS:$REMOTE_WS/"
 
-echo "完成。videos/ analyses/ exercises/ *.md .a2h/ 已同步；runs/ 可在 VPS 上重新生成。"
+echo "完成。videos/ analyses/ exercises/ *.md 已同步；provider API key 不通过 rsync，旧 workspace 需按迁移脚本处理。"

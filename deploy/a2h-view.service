@@ -1,15 +1,13 @@
 [Unit]
-Description=a2h viewer for video-script-trainer workspace
+Description=Disabled shared A2H viewer (per-user viewer is not configured)
 After=network.target
+ConditionPathExists=/etc/taste-trainer/enable-a2h
 
 [Service]
-WorkingDirectory=/srv/video-trainer/workspace
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/env a2h render /srv/video-trainer/workspace --watch --port 8420
-Restart=on-failure
-RestartSec=3
-User=videotrainer
-Group=videotrainer
+ExecStart=/usr/bin/false
+User=videotrainer-api
+Group=videotrainer-api
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
