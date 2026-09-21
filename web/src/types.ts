@@ -58,3 +58,14 @@ export type ProviderInput = {
   apiKey?: string
   selectedModelIds?: string[]
 }
+
+export type AuthUser = {
+  id?: string
+  username: string
+}
+
+export type AuthResponse = {
+  user: AuthUser
+  csrfToken?: string
+  csrf_token?: string
+}

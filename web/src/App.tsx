@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiFetch, jsonBody, providerFetch } from './api'
-import type { Exercise, Job, Principle, PrinciplesState, TrainerState, Video } from './types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiFetch, clearCsrfToken, isUnauthorized, jsonBody, providerFetch, setCsrfToken } from './api'
+import type { AuthResponse, AuthUser, Exercise, Job, Principle, PrinciplesState, TrainerState, Video } from './types'
 import { ProviderManager } from './components/ProviderManager'
 
 type View = 'practice' | 'providers'
@@ -81,7 +81,7 @@ function Button({ children, variant = 'secondary', ...props }: React.ButtonHTMLA
   return <button className={`button button-${variant}`} {...props}>{children}</button>
 }
 
-function PracticeView() {
+function PracticeView({ onUnauthorized }: { onUnauthorized?: () => void }) {
   const [state, setState] = useState<TrainerState | null>(null)
   const [principles, setPrinciples] = useState<PrinciplesState>({ pending: [], accepted: [] })
   const [submission, setSubmission] = useState('')
@@ -104,9 +104,13 @@ function PracticeView() {
         initializedPromptRef.current = nextState.latest_exercise.id
       }
     } catch (caught) {
+      if (isUnauthorized(caught)) {
+        onUnauthorized?.()
+        return
+      }
       setError(caught instanceof Error ? caught.message : '刷新失败')
     }
-  }, [])
+  }, [onUnauthorized])
 
   useEffect(() => {
     void refresh()
@@ -183,10 +187,171 @@ function PrincipleCard({ candidate, busy, onAction }: { candidate: Principle; bu
   return <div className="principle-card"><input value={title} onChange={event => setTitle(event.target.value)} /><textarea value={detail} onChange={event => setDetail(event.target.value)} /><small className="muted">来源：{candidate.source_video || '—'}</small><div className="inline-actions"><Button disabled={busy} onClick={() => onAction(candidate, 'accept', title, detail)}>修改后接受</Button><Button variant="ghost" disabled={busy} onClick={() => onAction(candidate, 'reject')}>拒绝</Button></div></div>
 }
 
-export default function App() {
+function authToken(data: AuthResponse): string | undefined {
+  return data.csrfToken ?? data.csrf_token
+}
+
+function errorMessage(caught: unknown, fallback: string) {
+  return caught instanceof Error ? caught.message : fallback
+}
+
+function LoginScreen({ busy, error, onSubmit }: { busy: boolean; error: string; onSubmit: (username: string, password: string) => void }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
+  return <main className="auth-page">
+    <section className="auth-card" aria-labelledby="login-title">
+      <div className="auth-brand">Taste<br /><span>Trainer</span></div>
+      <span className="eyebrow">Private practice space</span>
+      <h1 id="login-title">Welcome back.</h1>
+      <p className="auth-intro">登录后访问你的训练记录和 provider 配置。</p>
+      <form className="auth-form" onSubmit={event => { event.preventDefault(); onSubmit(username.trim(), password) }}>
+        <label className="auth-field">用户名<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label>
+        <label className="auth-field">密码<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required /></label>
+        {error && <p className="form-message form-message-error" role="alert">{error}</p>}
+        <Button variant="primary" type="submit" disabled={busy || !username.trim() || !password}>{busy ? '登录中…' : '登录'}</Button>
+      </form>
+    </section>
+  </main>
+}
+
+type AccountControlProps = {
+  user: AuthUser
+  onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>
+  onLogout: () => Promise<void>
+}
+
+function AccountControl({ user, onChangePassword, onLogout }: AccountControlProps) {
+  const [open, setOpen] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [logoutBusy, setLogoutBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  const changePassword = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError(''); setNotice('')
+    if (newPassword.length < 12) {
+      setError('新密码至少需要 12 个字符。')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setError('两次输入的新密码不一致。')
+      return
+    }
+    setBusy(true)
+    try {
+      await onChangePassword(currentPassword, newPassword)
+      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('')
+      setNotice('密码已更新。')
+    } catch (caught) {
+      setError(errorMessage(caught, '修改密码失败'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const logout = async () => {
+    setLogoutBusy(true); setError('')
+    try { await onLogout() } catch (caught) { setError(errorMessage(caught, '退出登录失败')) }
+    finally { setLogoutBusy(false) }
+  }
+
+  return <div className="account-control">
+    <button className="account-trigger" type="button" aria-expanded={open} onClick={() => { setOpen(value => !value); setError('') }}>
+      <span className="account-avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+      <span className="account-trigger-copy"><small>Signed in as</small><strong>{user.username}</strong></span>
+      <span className="account-chevron">{open ? '⌃' : '⌄'}</span>
+    </button>
+    {open && <div className="account-panel" role="dialog" aria-label="账户设置">
+      <div className="account-panel-head"><div><span className="eyebrow">Account</span><h2>{user.username}</h2></div><button className="icon-button" type="button" aria-label="关闭账户面板" onClick={() => setOpen(false)}>×</button></div>
+      <form className="account-form" onSubmit={changePassword}>
+        <p className="muted small">修改密码后，其他已登录会话会失效。</p>
+        <label className="auth-field">当前密码<input type="password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" required /></label>
+        <label className="auth-field">新密码<input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" minLength={12} required /></label>
+        <label className="auth-field">确认新密码<input type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" minLength={12} required /></label>
+        {error && <p className="form-message form-message-error" role="alert">{error}</p>}
+        {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
+        <div className="account-actions"><Button variant="primary" type="submit" disabled={busy || logoutBusy}>{busy ? '保存中…' : '修改密码'}</Button><Button variant="ghost" type="button" disabled={busy || logoutBusy} onClick={() => void logout()}>{logoutBusy ? '退出中…' : '退出登录'}</Button></div>
+      </form>
+    </div>}
+  </div>
+}
+
+function AuthenticatedShell({ user, onUnauthorized, onChangePassword, onLogout }: { user: AuthUser; onUnauthorized: () => void; onChangePassword: AccountControlProps['onChangePassword']; onLogout: AccountControlProps['onLogout'] }) {
   const [view, setView] = useState<View>(() => window.location.hash === '#providers' ? 'providers' : 'practice')
   const [providerCount, setProviderCount] = useState(0)
-  useEffect(() => { void providerFetch<{ providers: unknown[] }>('/providers').then(data => setProviderCount(data.providers.length)).catch(() => undefined) }, [view])
+  useEffect(() => {
+    void providerFetch<{ providers: unknown[] }>('/providers').then(data => setProviderCount(data.providers.length)).catch(caught => {
+      if (isUnauthorized(caught)) onUnauthorized()
+    })
+  }, [onUnauthorized, view])
   const navigate = (next: View) => { window.history.replaceState(null, '', next === 'providers' ? '#providers' : '#practice'); setView(next) }
-  return <div className="app-shell"><aside className="sidebar"><div className="brand">Taste<br /><span>Trainer</span></div><p className="tagline">TRAIN YOUR PALATE<br />ONE VIDEO AT A TIME.</p><nav><button className={view === 'practice' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('practice')}><span>◉</span>Practice</button><button className="nav-item" onClick={() => navigate('practice')}><span>▱</span>Library</button><button className={view === 'providers' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('providers')}><span>◌</span>Providers {providerCount > 0 && <b>{providerCount}</b>}</button></nav><div className="sidebar-foot">BETTER COOKS<br />TASTE MORE.</div></aside><main className="main-content">{view === 'practice' ? <PracticeView /> : <ProviderManager onCountChange={setProviderCount} />}</main></div>
+  return <div className="app-shell"><aside className="sidebar"><div className="brand">Taste<br /><span>Trainer</span></div><p className="tagline">TRAIN YOUR PALATE<br />ONE VIDEO AT A TIME.</p><nav><button className={view === 'practice' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('practice')}><span>◉</span>Practice</button><button className="nav-item" onClick={() => navigate('practice')}><span>▱</span>Library</button><button className={view === 'providers' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('providers')}><span>◌</span>Providers {providerCount > 0 && <b>{providerCount}</b>}</button></nav><div className="sidebar-account"><AccountControl user={user} onChangePassword={onChangePassword} onLogout={onLogout} /></div><div className="sidebar-foot">BETTER COOKS<br />TASTE MORE.</div></aside><main className="main-content"><div className="mobile-account-control"><AccountControl user={user} onChangePassword={onChangePassword} onLogout={onLogout} /></div>{view === 'practice' ? <PracticeView onUnauthorized={onUnauthorized} /> : <ProviderManager onCountChange={setProviderCount} onUnauthorized={onUnauthorized} />}</main></div>
+}
+
+export default function App() {
+  const [authState, setAuthState] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading')
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState('')
+
+  const expireSession = useCallback((message = '登录已过期，请重新登录。') => {
+    clearCsrfToken()
+    setUser(null)
+    setAuthState('unauthenticated')
+    setAuthError(message)
+  }, [])
+  const handleUnauthorized = useCallback(() => expireSession(), [expireSession])
+
+  useEffect(() => {
+    let cancelled = false
+    void apiFetch<AuthResponse>('/api/auth/me').then(data => {
+      if (cancelled) return
+      const token = authToken(data)
+      if (token) setCsrfToken(token)
+      setUser(data.user)
+      setAuthState('authenticated')
+    }).catch(caught => {
+      if (cancelled) return
+      if (isUnauthorized(caught)) expireSession('请登录后继续。')
+      else { setAuthError(errorMessage(caught, '无法连接认证服务。')); setAuthState('unauthenticated') }
+    })
+    return () => { cancelled = true }
+  }, [expireSession])
+
+  const login = (username: string, password: string) => {
+    setAuthBusy(true); setAuthError(''); clearCsrfToken()
+    void apiFetch<AuthResponse>('/api/auth/login', jsonBody({ username, password })).then(data => {
+      const token = authToken(data)
+      if (token) setCsrfToken(token)
+      setUser(data.user)
+      setAuthState('authenticated')
+    }).catch(caught => setAuthError(errorMessage(caught, '登录失败'))).finally(() => setAuthBusy(false))
+  }
+
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    try {
+      const data = await apiFetch<AuthResponse>('/api/auth/change-password', jsonBody({ currentPassword, newPassword }))
+      const token = authToken(data)
+      if (token) setCsrfToken(token)
+    } catch (caught) {
+      if (isUnauthorized(caught)) expireSession()
+      throw caught
+    }
+  }
+
+  const logout = async () => {
+    try { await apiFetch('/api/auth/logout', { method: 'POST' }) }
+    finally {
+      clearCsrfToken(); setUser(null); setAuthState('unauthenticated'); setAuthError('')
+    }
+  }
+
+  if (authState === 'loading') return <main className="auth-page"><div className="auth-loading">正在验证登录状态…</div></main>
+  if (!user) return <LoginScreen busy={authBusy} error={authError} onSubmit={login} />
+  return <AuthenticatedShell user={user} onUnauthorized={handleUnauthorized} onChangePassword={changePassword} onLogout={logout} />
 }

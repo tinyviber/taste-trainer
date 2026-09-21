@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { jsonBody, providerFetch } from '../api'
+import { isUnauthorized, jsonBody, providerFetch } from '../api'
 import type { ModelInfo, Provider } from '../types'
 
 function Button({ children, variant = 'secondary', className = '', type = 'button', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' | 'danger' }) {
@@ -15,13 +15,15 @@ function Field({ id, label, children }: { id: string; label: string; children: R
 
 type Draft = Provider & { apiKey: string; notice: string; busy: boolean; error: string }
 
+type DiscoveryResponse = { provider?: Provider; models: ModelInfo[] }
+
 function toDraft(provider: Provider): Draft {
   return { ...provider, apiKey: '', notice: '', busy: false, error: '' }
 }
 
 const blankProvider = (): Draft => ({ id: `draft-${crypto.randomUUID()}`, name: '', baseUrl: 'https://api.openai.com/v1', hasApiKey: false, models: [], selectedModelIds: [], apiKey: '', notice: '', busy: false, error: '' })
 
-export function ProviderManager({ onCountChange }: { onCountChange: (count: number) => void }) {
+export function ProviderManager({ onCountChange, onUnauthorized }: { onCountChange: (count: number) => void; onUnauthorized?: () => void }) {
   const [providers, setProviders] = useState<Draft[]>([])
   const [loading, setLoading] = useState(true)
   const [globalError, setGlobalError] = useState('')
@@ -30,43 +32,81 @@ export function ProviderManager({ onCountChange }: { onCountChange: (count: numb
     try {
       const data = await providerFetch<{ providers: Provider[] }>('/providers')
       setProviders(data.providers.map(toDraft)); onCountChange(data.providers.length)
-    } catch (caught) { setGlobalError(caught instanceof Error ? caught.message : '加载 provider 失败') }
+    } catch (caught) {
+      if (isUnauthorized(caught)) onUnauthorized?.()
+      else setGlobalError(caught instanceof Error ? caught.message : '加载 provider 失败')
+    }
     finally { setLoading(false) }
-  }, [onCountChange])
+  }, [onCountChange, onUnauthorized])
 
   useEffect(() => { void load() }, [load])
 
   const update = (id: string, patch: Partial<Draft>) => setProviders(current => current.map(provider => provider.id === id ? { ...provider, ...patch } : provider))
   const save = async (draft: Draft) => {
     const isDraft = draft.id.startsWith('draft-')
+    let savedId = draft.id
     update(draft.id, { busy: true, error: '', notice: '' })
     try {
       const data = await providerFetch<{ provider: Provider }>('/providers', jsonBody({ id: isDraft ? undefined : draft.id, name: draft.name, baseUrl: draft.baseUrl, apiKey: draft.apiKey || undefined, selectedModelIds: draft.selectedModelIds }))
-      let next = { ...toDraft(data.provider), apiKey: '' }
+      savedId = data.provider.id
       if (data.provider.hasApiKey) {
         try {
-          const detected = await providerFetch<{ provider: Provider; models: ModelInfo[] }>(`/providers/${encodeURIComponent(data.provider.id)}/discover`, { method: 'POST' })
-          next = { ...toDraft(detected.provider), apiKey: '', notice: `已自动检测到 ${detected.models.length} 个模型` }
+          const detected = await providerFetch<DiscoveryResponse>(`/providers/${encodeURIComponent(data.provider.id)}/discover`, jsonBody({ baseUrl: draft.baseUrl, apiKey: draft.apiKey }))
+          setProviders(current => current.map(item => item.id === draft.id ? { ...toDraft(detected.provider ?? data.provider), apiKey: '', busy: false, notice: `已自动检测到 ${detected.models.length} 个模型` } : item))
         } catch (caught) {
-          next = { ...next, notice: '配置已保存，但自动检测失败', error: caught instanceof Error ? caught.message : '模型检测失败' }
+          if (isUnauthorized(caught)) onUnauthorized?.()
+          setProviders(current => current.map(item => item.id === draft.id ? {
+            ...item,
+            ...data.provider,
+            id: savedId,
+            name: draft.name,
+            baseUrl: draft.baseUrl,
+            selectedModelIds: draft.selectedModelIds,
+            apiKey: draft.apiKey,
+            busy: false,
+            notice: '配置已保存，但自动检测失败',
+            error: caught instanceof Error ? caught.message : '模型检测失败',
+          } : item))
         }
+      } else {
+        setProviders(current => current.map(item => item.id === draft.id ? { ...toDraft(data.provider), apiKey: '', busy: false } : item))
       }
-      setProviders(current => current.map(item => item.id === draft.id ? next : item))
       if (isDraft) onCountChange(providers.filter(item => !item.id.startsWith('draft-')).length + 1)
-    } catch (caught) { update(draft.id, { error: caught instanceof Error ? caught.message : '保存失败' }) }
+    } catch (caught) {
+      if (isUnauthorized(caught)) onUnauthorized?.()
+      update(draft.id, { error: caught instanceof Error ? caught.message : '保存失败' })
+    } finally {
+      setProviders(current => current.map(item => item.id === draft.id || item.id === savedId ? { ...item, busy: false } : item))
+    }
   }
   const discover = async (draft: Draft) => {
     update(draft.id, { busy: true, error: '', notice: '正在检测 /models…' })
     try {
-      const data = await providerFetch<{ provider: Provider; models: ModelInfo[] }>(`/providers/${encodeURIComponent(draft.id)}/discover`, { method: 'POST' })
-      setProviders(current => current.map(item => item.id === draft.id ? { ...item, ...data.provider, apiKey: '', busy: false, notice: `检测到 ${data.models.length} 个模型` } : item))
-    } catch (caught) { update(draft.id, { busy: false, error: caught instanceof Error ? caught.message : '模型检测失败' }) }
+      const data = draft.id.startsWith('draft-')
+        ? await providerFetch<DiscoveryResponse>('/providers/test', jsonBody({ baseUrl: draft.baseUrl, apiKey: draft.apiKey }))
+        : await providerFetch<DiscoveryResponse>(`/providers/${encodeURIComponent(draft.id)}/discover`, jsonBody({ baseUrl: draft.baseUrl, apiKey: draft.apiKey }))
+      setProviders(current => current.map(item => {
+        if (item.id !== draft.id) return item
+        if (draft.id.startsWith('draft-')) {
+          return { ...item, models: data.models, busy: false, error: '', notice: `检测到 ${data.models.length} 个模型` }
+        }
+        return { ...item, ...(data.provider ?? {}), apiKey: '', busy: false, error: '', notice: `检测到 ${data.models.length} 个模型` }
+      }))
+    } catch (caught) {
+      if (isUnauthorized(caught)) onUnauthorized?.()
+      update(draft.id, { busy: false, error: caught instanceof Error ? caught.message : '模型检测失败' })
+    } finally {
+      update(draft.id, { busy: false })
+    }
   }
   const remove = async (draft: Draft) => {
     if (!window.confirm(`删除 provider「${draft.name || draft.id}」？`)) return
     if (draft.id.startsWith('draft-')) { setProviders(current => current.filter(item => item.id !== draft.id)); return }
     try { await providerFetch(`/providers/${encodeURIComponent(draft.id)}`, { method: 'DELETE' }); setProviders(current => current.filter(item => item.id !== draft.id)); onCountChange(Math.max(0, providers.length - 1)) }
-    catch (caught) { update(draft.id, { error: caught instanceof Error ? caught.message : '删除失败' }) }
+    catch (caught) {
+      if (isUnauthorized(caught)) onUnauthorized?.()
+      update(draft.id, { error: caught instanceof Error ? caught.message : '删除失败' })
+    }
   }
   const add = () => setProviders(current => [...current, blankProvider()])
 
@@ -111,7 +151,7 @@ function ProviderCard({ draft, update, onSave, onDiscover, onDelete }: { draft: 
 
     <div className="provider-actions">
       <Button variant="primary" disabled={draft.busy || !draft.name || !draft.baseUrl} onClick={onSave}>保存并检测</Button>
-      <Button disabled={draft.busy || !draft.id || draft.id.startsWith('draft-')} onClick={onDiscover}>重新检测 <span>↗</span></Button>
+      <Button disabled={draft.busy || !draft.baseUrl} onClick={onDiscover}>重新检测 <span>↗</span></Button>
     </div>
 
     {draft.notice && <p className="form-message form-message-success" role="status">✓ {draft.notice}</p>}
