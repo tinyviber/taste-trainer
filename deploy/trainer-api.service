@@ -14,7 +14,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/srv/video-trainer/workspace
+ReadWritePaths=/srv/video-trainer/service/workspace
 
 [Install]
 WantedBy=multi-user.target
