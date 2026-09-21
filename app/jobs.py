@@ -14,8 +14,8 @@ from uuid import uuid4
 from . import manifest, pipeline, renders
 from .config import Settings, safe_child, ws_dirs
 from .llm import chat_json
-from .principles import save_candidates
-from .schemas import normalize_grade
+from .principles import active_profile_text, save_candidates
+from .schemas import normalize_grade, normalize_micro_feedback
 
 
 def _write_run(dirs: dict, job_id: str, title: str, status: str,
@@ -114,7 +114,7 @@ def _ground_pass1(result: dict, frame_map: dict[str, str]) -> dict:
 # ---------------------------------------------------------------- 出题
 
 def new_exercise(settings: Settings, force: bool = False) -> dict:
-    dirs = ws_dirs(settings.workspace)
+    dirs = ws_dirs(settings.workspace, settings.training_assets_dir)
     existing = _exercise_metas(dirs["exercises"])
     latest_dir, latest_meta = existing[-1] if existing else (None, {})
     if latest_meta.get("status") in ("prompted", "submitted", "needs_micro_revision"):
@@ -140,7 +140,7 @@ def new_exercise(settings: Settings, force: bool = False) -> dict:
     ex_dir.mkdir(parents=True, exist_ok=True)
     (ex_dir / "prompt.md").write_text(
         renders.render_prompt_md(data, str(date.today())), encoding="utf-8")
-    sub_tpl = renders.read(dirs["template"] / "submission.md")
+    sub_tpl = renders.read_required(dirs["submission_template"], "提交模板")
     (ex_dir / "submission.md").write_text(
         sub_tpl.replace("<复制题目名>", data["title"]), encoding="utf-8")
 
@@ -161,7 +161,7 @@ def new_exercise(settings: Settings, force: bool = False) -> dict:
 # ---------------------------------------------------------------- 打分
 
 def grade(settings: Settings, exercise_id: str, submission_text: str) -> dict:
-    dirs = ws_dirs(settings.workspace)
+    dirs = ws_dirs(settings.workspace, settings.training_assets_dir)
     try:
         ex_dir = safe_child(dirs["exercises"], exercise_id)
     except ValueError as exc:
@@ -186,8 +186,8 @@ def grade(settings: Settings, exercise_id: str, submission_text: str) -> dict:
         _client(settings), _model(settings),
         renders.load_prompt(
             "grade",
-            rubric=renders.read(dirs["rubric"]),
-            principles=renders.read(dirs["principles"], "（暂无累积原则）"),
+            rubric=renders.read_required(dirs["rubric"], "评分 rubric"),
+            principles=active_profile_text(dirs),
             prompt=renders.read(ex_dir / "prompt.md"),
             submission=submission_text),
         user="请评审并给出 JSON。",
@@ -221,8 +221,8 @@ def grade(settings: Settings, exercise_id: str, submission_text: str) -> dict:
 
 def complete_micro_revision(settings: Settings, exercise_id: str,
                             micro_text: str) -> dict:
-    """Save the learner's focused rewrite, then reveal the full model revision."""
-    dirs = ws_dirs(settings.workspace)
+    """Give targeted feedback on micro-v2, then reveal the reference revision."""
+    dirs = ws_dirs(settings.workspace, settings.training_assets_dir)
     try:
         ex_dir = safe_child(dirs["exercises"], exercise_id)
     except ValueError as exc:
@@ -238,16 +238,47 @@ def complete_micro_revision(settings: Settings, exercise_id: str,
     if not grade_path.exists():
         raise RuntimeError("grade.json 不存在，无法展开 revision")
     grade_data = json.loads(grade_path.read_text(encoding="utf-8"))
+    focus = meta.get("micro_revision_focus")
+    if not isinstance(focus, dict):
+        focus = {}
+    target_dim = str(focus.get("dim") or meta.get("weakest") or "当前最弱维度").strip()
+    try:
+        v1_score = int(focus.get("score", 0))
+    except (TypeError, ValueError):
+        v1_score = 0
+    feedback = normalize_micro_feedback(
+        chat_json(
+            _client(settings), _model(settings),
+            renders.load_prompt(
+                "micro_feedback",
+                target_dim=target_dim,
+                v1_score=max(0, min(10, v1_score)),
+                original=str(focus.get("original", "")),
+                gap=str(focus.get("gap", "")),
+                micro_revision=micro_text.strip(),
+            ),
+            user="请反馈这次 micro-v2，只评价目标维度。",
+            temperature=0.3,
+        ),
+        target_dim,
+        v1_score,
+    )
     (ex_dir / "micro_revision.md").write_text(
         f"# 我的局部改写（micro-v2）\n\n"
         f"> 题目：{meta.get('title', '')} ｜ 聚焦：{meta.get('weakest', '—')}\n\n"
         + micro_text.strip() + "\n", encoding="utf-8")
+    (ex_dir / "micro_feedback.json").write_text(
+        json.dumps(feedback, ensure_ascii=False, indent=2), encoding="utf-8")
+    (ex_dir / "micro_feedback.md").write_text(
+        renders.render_micro_feedback(feedback, meta.get("title", "")),
+        encoding="utf-8")
     (ex_dir / "revision.md").write_text(
         renders.render_revision_md(grade_data, meta.get("title", "")),
         encoding="utf-8")
     meta.update({
         "status": "reviewed",
         "micro_revision_submitted": True,
+        "micro_feedback_estimated_score": feedback["estimated_score"],
         "summary": f"已评审：{meta.get('score', 0)}/100，已完成 micro-v2。",
     })
     renders.save_meta(ex_dir, meta)
@@ -256,6 +287,7 @@ def complete_micro_revision(settings: Settings, exercise_id: str,
     _write_run(dirs, f"micro-{exercise_id}", f"micro-v2：{meta.get('title')}",
                "succeeded", "已提交局部改写并展开完整 revision",
                [f"exercises/{exercise_id}/micro_revision.md",
+                f"exercises/{exercise_id}/micro_feedback.md",
                 f"exercises/{exercise_id}/revision.md"])
     return meta
 
@@ -263,7 +295,7 @@ def complete_micro_revision(settings: Settings, exercise_id: str,
 # ---------------------------------------------------------------- 分析视频
 
 def analyze(settings: Settings, video_name: str) -> dict:
-    dirs = ws_dirs(settings.workspace)
+    dirs = ws_dirs(settings.workspace, settings.training_assets_dir)
     try:
         video = safe_child(dirs["videos"], video_name)
         inbox = safe_child(dirs["inbox"], video_name)

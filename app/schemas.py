@@ -80,6 +80,22 @@ class GradeResult(_Model):
         return value
 
 
+class MicroFeedbackResult(_Model):
+    """A short, targeted response to the learner's micro-v2 rewrite."""
+
+    estimated_score: int = Field(ge=0, le=10)
+    fixed: str
+    remaining_gap: str
+    next_step: str
+
+    @field_validator("fixed", "remaining_gap", "next_step")
+    @classmethod
+    def feedback_must_be_specific(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("micro feedback fields must not be empty")
+        return value.strip()
+
+
 def normalize_grade(data: dict[str, Any]) -> dict:
     """Validate a grade and compute the authoritative total locally."""
     result = (GradeResult.model_validate(data) if PYDANTIC_V2
@@ -88,4 +104,19 @@ def normalize_grade(data: dict[str, Any]) -> dict:
               else result.dict())
     output["total"] = sum(item["score"] for item in output["scores"])
     output["schema_version"] = 1
+    return output
+
+
+def normalize_micro_feedback(data: dict[str, Any], target_dim: str,
+                             v1_score: int) -> dict:
+    """Validate model feedback while keeping target metadata server-owned."""
+    result = (MicroFeedbackResult.model_validate(data) if PYDANTIC_V2
+              else MicroFeedbackResult.parse_obj(data))
+    output = (result.model_dump(mode="json") if PYDANTIC_V2
+              else result.dict())
+    output.update({
+        "target_dim": target_dim,
+        "v1_score": max(0, min(10, int(v1_score))),
+        "schema_version": 1,
+    })
     return output

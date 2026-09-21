@@ -30,6 +30,7 @@ def _exercise_items(d: Path, meta: dict) -> tuple[list[dict], list[str]]:
     specs = [
         ("review.md", "review", "评分与修改意见", 100),
         ("revision.md", "candidate", "修改版分镜 v2", 95),
+        ("micro_feedback.md", "feedback", "micro-v2 定向反馈", 96),
         ("micro_revision.md", "submission", "我的局部改写 micro-v2", 94),
         ("grade.json", "data", "完整评分数据", 92),
         ("submission.md", "submission", "分镜方案", 90),
@@ -148,14 +149,15 @@ def regenerate(ws: Path, dirs: dict) -> Path:
     if dirs["principles"].exists():
         items.append({"path": "analyses/PRINCIPLES.md", "role": "spec",
                       "title": "口味基准（累积原则）",
-                      "summary": "从历史视频分析中累积的注意力调度原则，评审时用于校准",
+                      "summary": "完整的原则 ledger；评审使用其 compact active profile",
                       "group": "reference", "priority": 48})
-    for p, title in [(dirs["rubric"], "评分维度（打分唯一依据）"),
-                     (dirs["pool"], "题库"), (ws / "AGENTS.md", "工作区协议")]:
-        if p.exists():
-            items.append({"path": p.name if p.parent == ws else str(p.relative_to(ws)),
-                          "role": "spec", "title": title,
-                          "summary": "", "group": "reference", "priority": 40})
+    if dirs.get("active_profile", Path()).exists():
+        items.append({"path": "analyses/ACTIVE_PROFILE.md", "role": "spec",
+                      "title": "当前口味 profile",
+                      "summary": "评分实际注入的 compact 原则集合",
+                      "group": "reference", "priority": 52})
+    # Shared application assets live outside the user workspace and are not
+    # valid paths in a per-user manifest.  They are still read by the jobs.
 
     latest_ex = ex_metas[-1] if ex_metas else {}
     latest_an = an_metas[-1] if an_metas else {}

@@ -73,6 +73,7 @@ function ExerciseDocuments({ exercise, documents }: { exercise: Exercise; docume
       {exercise.status !== 'prompted' && <DocumentCard eyebrow="Submission / 我的方案" title="你的分镜方案" content={documents.submission} />}
       <DocumentCard eyebrow="Review / 评分" title="评分与修改意见" content={documents.review} tone="review" />
       <DocumentCard eyebrow="micro-v2 / 局部改写" title="我的局部改写" content={documents.micro_revision} />
+      <DocumentCard eyebrow="Micro-v2 / 定向反馈" title="这次改对了什么" content={documents.micro_feedback} tone="review" />
       <DocumentCard eyebrow="Revision / 修改版" title="完整修改版分镜" content={documents.revision} tone="revision" />
     </div>
   </section>
@@ -136,7 +137,7 @@ function PracticeView({ onUnauthorized }: { onUnauthorized?: () => void }) {
     const form = new FormData(); form.append('file', file)
     await run('/api/analyze', { method: 'POST', body: form })
   }
-  const actionPrinciple = (candidate: Principle, action: 'accept' | 'reject', title = candidate.title, detail = candidate.detail) =>
+  const actionPrinciple = (candidate: Principle, action: 'accept' | 'reject' | 'activate' | 'deactivate', title = candidate.title, detail = candidate.detail) =>
     void run(`/api/principles/${encodeURIComponent(candidate.id)}`, jsonBody({ action, title, detail }))
 
   return <>
@@ -174,7 +175,8 @@ function PracticeView({ onUnauthorized }: { onUnauthorized?: () => void }) {
     </section>
 
     <div className="two-column lower-grid">
-      <section className="panel"><SectionTitle eyebrow="Taste system" title="口味原则候选" /><p className="muted small">视频分析产生的原则不会自动进入评分基准，请人工接受或拒绝。</p>{principles.pending.length ? <div className="principle-list">{principles.pending.map(candidate => <PrincipleCard key={candidate.id} candidate={candidate} busy={busy} onAction={actionPrinciple} />)}</div> : <Empty>暂无待确认的原则候选。</Empty>}</section>
+      <section className="panel"><SectionTitle eyebrow="Taste system" title="口味原则候选" /><p className="muted small">接受后会进入完整 ledger，并自动合并相似原则，只把 compact active profile 注入评分。</p>{principles.pending.length ? <div className="principle-list">{principles.pending.map(candidate => <PrincipleCard key={candidate.id} candidate={candidate} busy={busy} onAction={actionPrinciple} />)}</div> : <Empty>暂无待确认的原则候选。</Empty>}</section>
+      <section className="panel"><SectionTitle eyebrow="Active taste profile" title="当前生效原则" action={<span className="count-label">{principles.active?.length ?? principles.accepted.length} active</span>} />{principles.active?.length || principles.accepted.length ? <div className="active-principle-list">{(principles.active ?? principles.accepted).map(principle => <div className="active-principle-row" key={principle.id}><div><strong>{principle.title}</strong><p>{principle.detail}</p></div><Button variant="ghost" disabled={busy} onClick={() => actionPrinciple(principle, 'deactivate')}>停用</Button></div>)}</div> : <Empty>还没有生效的原则。</Empty>}{principles.inactive?.filter(principle => principle.status === 'inactive').length ? <div className="inactive-principle-list"><span className="eyebrow">Inactive / 已停用</span>{principles.inactive.filter(principle => principle.status === 'inactive').map(principle => <div className="active-principle-row" key={principle.id}><div><strong>{principle.title}</strong><p>{principle.detail}</p></div><Button variant="ghost" disabled={busy} onClick={() => actionPrinciple(principle, 'activate')}>恢复</Button></div>)}</div> : null}</section>
       <section className="panel"><SectionTitle eyebrow="Operations" title="任务日志" />{Object.keys(state?.jobs ?? {}).length ? <div className="job-list">{Object.entries(state?.jobs ?? {}).reverse().map(([id, job]) => <div className="job-row" key={id}><StatusPill status={job.status} /><span className="mono truncate">{id}</span><span className="muted truncate">{job.detail}</span></div>)}</div> : <Empty>还没有后台任务。</Empty>}</section>
     </div>
 
@@ -182,7 +184,7 @@ function PracticeView({ onUnauthorized }: { onUnauthorized?: () => void }) {
   </>
 }
 
-function PrincipleCard({ candidate, busy, onAction }: { candidate: Principle; busy: boolean; onAction: (candidate: Principle, action: 'accept' | 'reject', title?: string, detail?: string) => void }) {
+function PrincipleCard({ candidate, busy, onAction }: { candidate: Principle; busy: boolean; onAction: (candidate: Principle, action: 'accept' | 'reject' | 'activate' | 'deactivate', title?: string, detail?: string) => void }) {
   const [title, setTitle] = useState(candidate.title)
   const [detail, setDetail] = useState(candidate.detail)
   return <div className="principle-card"><input value={title} onChange={event => setTitle(event.target.value)} /><textarea value={detail} onChange={event => setDetail(event.target.value)} /><small className="muted">来源：{candidate.source_video || '—'}</small><div className="inline-actions"><Button disabled={busy} onClick={() => onAction(candidate, 'accept', title, detail)}>修改后接受</Button><Button variant="ghost" disabled={busy} onClick={() => onAction(candidate, 'reject')}>拒绝</Button></div></div>

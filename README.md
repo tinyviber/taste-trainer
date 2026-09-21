@@ -32,7 +32,8 @@ service/
 │   ├── schemas.py    LLM 评分 JSON 校验与归一化
 │   └── prompts/      每个任务的 system prompt（{{var}} 占位符）
 ├── web/              Vite + React + TypeScript 仪表盘
-└── provider-service/ Node AI SDK provider registry 与加密模型发现服务
+├── provider-service/ Node AI SDK provider registry 与加密模型发现服务
+├── training-assets/ 通用评分 rubric、题库和提交模板（不属于用户 workspace）
 ├── deploy/           setup.sh + systemd 单元
 └── scripts/          rsync-data.sh.example
 ```
@@ -51,7 +52,8 @@ bash scripts/local.sh
 题目全文、提交内容、评分意见、
 micro-v2 和完整 revision 都会直接显示在 React 页面；A2H 只作为可选的工作区深度
 浏览器。评审后先完成一个 micro-v2，再展开 LLM 生成的完整 revision；视频分析产生
-的原则候选需要人工接受后才会进入 `analyses/PRINCIPLES.md`。
+的原则候选需要人工接受后才会进入完整 ledger；评分只注入自动去重、最多 40 条的
+`analyses/ACTIVE_PROFILE.md`，而不是无限增长的历史文件。
 
 只跑检查或构建时可用：
 
@@ -135,12 +137,15 @@ SQLite，训练数据存放于 `WORKSPACE_DIR/users/<user-uuid>/`。旧的 `API_
 
 - `exercises/<slug>/meta.json`：练习状态机 `prompted → submitted → needs_micro_revision → reviewed|skipped`
 - `exercises/<slug>/grade.json`：完整、校验过的十维评分 JSON；`total` 由服务端计算
-- `exercises/<slug>/micro_revision.md`：提交的局部 v2；提交后才生成 `revision.md`
+- `exercises/<slug>/micro_revision.md`：提交的局部 v2
+- `exercises/<slug>/micro_feedback.md`：只针对目标维度的二次反馈；成功后才生成 `revision.md`
 - `analyses/<slug>/meta.json`：标题/摘要/stats/keyframe_notes
 - `analyses/<slug>/frame_manifest.json`：frame id 到真实 timestamp 的映射
 - `analyses/<slug>/principles_candidates.json`：待人工确认的原则候选
 - 视频分析的报告按关键段落、镜头转换和注意力事件组织，不伪造逐秒 transcription
-- `analyses/PRINCIPLES.md`：口味基准，评审时注入，越用越准
-- `analyses/principles.json`：已接受原则的机器可读 ledger
+- `analyses/PRINCIPLES.md`：完整、可读的原则 ledger（包括停用/合并历史）
+- `analyses/principles.json`：schema v2 机器可读 ledger 与 active_ids/events
+- `analyses/ACTIVE_PROFILE.md`：当前评分实际使用的 compact taste profile
+- `training-assets/`：共享的 `RUBRIC.md`、`PROMPT_POOL.md`、`submission-template.md`
 - `videos/inbox/`：丢视频进去即可分析
 - `runs/`：中间产物，可再生，rsync 时排除

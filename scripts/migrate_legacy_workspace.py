@@ -16,8 +16,8 @@ from pathlib import Path
 from uuid import UUID
 
 
-COPY_DIRS = ("videos", "runs", "analyses", "exercises")
-COPY_FILES = ("RUBRIC.md", "PROMPT_POOL.md", "AGENTS.md")
+COPY_DIRS = ("videos", "runs", "analyses")
+SHARED_FILES = ("RUBRIC.md", "PROMPT_POOL.md", "AGENTS.md")
 
 
 def _validate_user_id(user_id: str) -> str:
@@ -40,6 +40,44 @@ def _copy_tree(source: Path, target: Path, *, dry_run: bool) -> list[str]:
     return copied
 
 
+def _copy_exercises(source: Path, target: Path, *, dry_run: bool) -> list[str]:
+    """Copy user history while leaving the old shared template in place."""
+    if not source.exists():
+        return []
+    copied: list[str] = []
+    for child in sorted(source.iterdir()):
+        if child.name == "_template":
+            continue
+        relative = child.relative_to(source)
+        if dry_run:
+            copied.extend(str(path.relative_to(source)) for path in child.rglob("*"))
+            if child.is_file():
+                copied.append(str(relative))
+            continue
+        destination = target / relative
+        if child.is_dir():
+            shutil.copytree(child, destination, copy_function=shutil.copy2)
+            copied.extend(str(path.relative_to(source)) for path in child.rglob("*"))
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, destination)
+            copied.append(str(relative))
+    return copied
+
+
+def _remove_exercise_history(source: Path) -> None:
+    """Remove migrated exercise history but preserve the legacy template."""
+    if not source.exists():
+        return
+    for child in source.iterdir():
+        if child.name == "_template":
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def migrate(root: Path, user_id: str, *, dry_run: bool = False,
             remove_source: bool = False) -> dict:
     root = Path(root).expanduser().resolve()
@@ -53,9 +91,11 @@ def migrate(root: Path, user_id: str, *, dry_run: bool = False,
         source = root / name
         if source.exists():
             plan.append(name + "/")
-    for name in COPY_FILES:
-        if (root / name).exists():
-            plan.append(name)
+    if (root / "exercises").exists():
+        plan.append("exercises/ (shared _template excluded)")
+    shared = [name for name in SHARED_FILES if (root / name).exists()]
+    if shared:
+        plan.append("shared assets retained at legacy root: " + ", ".join(shared))
     a2h = root / ".a2h"
     if a2h.exists():
         plan.append(".a2h/ (providers.json excluded; migrate it through Node encryption)")
@@ -73,10 +113,7 @@ def migrate(root: Path, user_id: str, *, dry_run: bool = False,
     try:
         for name in COPY_DIRS:
             _copy_tree(root / name, target / name, dry_run=False)
-        for name in COPY_FILES:
-            source = root / name
-            if source.exists():
-                shutil.copy2(source, target / name)
+        _copy_exercises(root / "exercises", target / "exercises", dry_run=False)
         if a2h.exists():
             destination = target / ".a2h"
             for source in a2h.rglob("*"):
@@ -91,12 +128,13 @@ def migrate(root: Path, user_id: str, *, dry_run: bool = False,
                     shutil.copy2(source, destination_path)
         report["target_sha256"] = _tree_digest(target)
         if remove_source:
-            for name in COPY_DIRS + COPY_FILES:
+            for name in COPY_DIRS:
                 path = root / name
                 if path.is_dir():
                     shutil.rmtree(path)
                 elif path.exists():
                     path.unlink()
+            _remove_exercise_history(root / "exercises")
         return report
     except Exception:
         shutil.rmtree(target, ignore_errors=True)

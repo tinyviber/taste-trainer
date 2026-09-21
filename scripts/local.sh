@@ -6,7 +6,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 ENV_FILE="$ROOT_DIR/.env"
 WORKSPACE_DIR="${WORKSPACE_DIR:-$ROOT_DIR/workspace}"
+TRAINING_ASSETS_DIR="${TRAINING_ASSETS_DIR:-$ROOT_DIR/training-assets}"
 export WORKSPACE_DIR
+export TRAINING_ASSETS_DIR
 cd "$ROOT_DIR"
 MODE="${1:-start}"
 
@@ -31,6 +33,7 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 # Keep the low-friction project-local default when .env leaves it unset.
 export WORKSPACE_DIR="${WORKSPACE_DIR:-$ROOT_DIR/workspace}"
+export TRAINING_ASSETS_DIR="${TRAINING_ASSETS_DIR:-$ROOT_DIR/training-assets}"
 export PROVIDER_DATA_DIR="${PROVIDER_DATA_DIR:-$WORKSPACE_DIR/.provider-data}"
 
 if [[ "$MODE" == "start" ]]; then
@@ -47,15 +50,15 @@ if [[ "$MODE" == "start" ]]; then
     exit 1
   fi
 
-  mkdir -p "$WORKSPACE_DIR"/{videos/inbox,runs,analyses,exercises/_template,.a2h/runs}
+  mkdir -p "$WORKSPACE_DIR/users"
 
   for required in \
-    "$WORKSPACE_DIR/RUBRIC.md" \
-    "$WORKSPACE_DIR/PROMPT_POOL.md" \
-    "$WORKSPACE_DIR/exercises/_template/submission.md"; do
+    "$TRAINING_ASSETS_DIR/RUBRIC.md" \
+    "$TRAINING_ASSETS_DIR/PROMPT_POOL.md" \
+    "$TRAINING_ASSETS_DIR/submission-template.md"; do
     if [[ ! -f "$required" ]]; then
-      echo "workspace 缺少必需文件：$required" >&2
-      echo "请把已有 workspace 数据放入 $WORKSPACE_DIR 后重试。" >&2
+      echo "training-assets 缺少必需文件：$required" >&2
+      echo "请补齐应用训练资产后重试。" >&2
       exit 1
     fi
   done

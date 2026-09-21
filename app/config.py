@@ -9,11 +9,18 @@ load_dotenv()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKSPACE = PROJECT_ROOT / "workspace"
+DEFAULT_TRAINING_ASSETS = PROJECT_ROOT / "training-assets"
+TRAINING_ASSET_FILES = {
+    "rubric": "RUBRIC.md",
+    "pool": "PROMPT_POOL.md",
+    "submission_template": "submission-template.md",
+}
 
 
 @dataclass
 class Settings:
     workspace: Path
+    training_assets_dir: Path
     auth_db_path: Path
     llm_base_url: str
     llm_api_key: str
@@ -36,6 +43,11 @@ class Settings:
 def load_settings() -> Settings:
     ws = os.environ.get("WORKSPACE_DIR", "").strip()
     workspace = Path(ws).expanduser().resolve() if ws else DEFAULT_WORKSPACE
+    assets = os.environ.get("TRAINING_ASSETS_DIR", "").strip()
+    training_assets_dir = (
+        Path(assets).expanduser().resolve() if assets else DEFAULT_TRAINING_ASSETS
+    )
+    validate_training_assets(training_assets_dir)
     auth_db = os.environ.get("AUTH_DB_PATH", "").strip()
     auth_db_path = Path(auth_db).expanduser().resolve() if auth_db else workspace / "auth.sqlite3"
     base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
@@ -45,6 +57,7 @@ def load_settings() -> Settings:
     model = os.environ.get("LLM_MODEL", "gpt-4o")
     return Settings(
         workspace=workspace,
+        training_assets_dir=training_assets_dir,
         auth_db_path=auth_db_path,
         llm_base_url=base,
         llm_api_key=key,
@@ -69,21 +82,49 @@ def load_settings() -> Settings:
     )
 
 
-# 工作区内的固定子路径
-def ws_dirs(ws: Path) -> dict:
+# Application-owned training assets are required at startup; silently grading
+# without a rubric would make the resulting score meaningless.
+def validate_training_assets(root: Path) -> None:
+    missing = [
+        filename for filename in TRAINING_ASSET_FILES.values()
+        if not (root / filename).is_file()
+    ]
+    if missing:
+        raise SystemExit(
+            "training assets missing in " + str(root) + ": " + ", ".join(missing)
+        )
+
+
+# Workspace paths. ``assets_dir`` is optional for backwards-compatible
+# tooling that still operates on a legacy single-user workspace.
+def ws_dirs(ws: Path, assets_dir: Path | None = None) -> dict:
+    assets = Path(assets_dir).expanduser().resolve() if assets_dir else None
+    legacy_template = ws / "exercises" / "_template"
     return {
         "videos": ws / "videos",
         "inbox": ws / "videos" / "inbox",
         "runs": ws / "runs",
         "analyses": ws / "analyses",
         "exercises": ws / "exercises",
-        "template": ws / "exercises" / "_template",
+        "template": legacy_template,
+        "training_assets": assets,
+        "submission_template": (
+            assets / TRAINING_ASSET_FILES["submission_template"]
+            if assets else legacy_template / "submission.md"
+        ),
         "a2h": ws / ".a2h",
         "runs_meta": ws / ".a2h" / "runs",
         "index": ws / "exercises" / "INDEX.md",
-        "rubric": ws / "RUBRIC.md",
-        "pool": ws / "PROMPT_POOL.md",
+        "rubric": (
+            assets / TRAINING_ASSET_FILES["rubric"]
+            if assets else ws / "RUBRIC.md"
+        ),
+        "pool": (
+            assets / TRAINING_ASSET_FILES["pool"]
+            if assets else ws / "PROMPT_POOL.md"
+        ),
         "principles": ws / "analyses" / "PRINCIPLES.md",
+        "active_profile": ws / "analyses" / "ACTIVE_PROFILE.md",
         "principles_meta": ws / "analyses" / "principles.json",
         "manifest": ws / ".a2h" / "manifest.json",
     }

@@ -15,6 +15,7 @@ export type ExerciseDocuments = {
   submission: string
   review: string
   micro_revision: string
+  micro_feedback: string
   revision: string
 }
 
@@ -35,9 +36,16 @@ export type Principle = {
   detail: string
   evidence?: unknown
   source_video?: string
+  status?: string
 }
 
-export type PrinciplesState = { pending: Principle[]; accepted: Principle[] }
+export type PrinciplesState = {
+  pending: Principle[]
+  accepted: Principle[]
+  active?: Principle[]
+  inactive?: Principle[]
+  ledger?: Principle[]
+}
 
 export type ModelInfo = { id: string; owned_by?: string }
 
