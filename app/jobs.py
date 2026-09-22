@@ -1,4 +1,4 @@
-"""The three LLM jobs: 出题 / 打分 / 分析视频.
+"""The LLM jobs: 出题 / 打分 / 分析视频 / 整理提交.
 
 Each job writes a run record to .a2h/runs/<job>.json so progress is visible
 in the A2H viewer, produces markdown artifacts via renders.py, and leaves
@@ -217,6 +217,39 @@ def grade(settings: Settings, exercise_id: str, submission_text: str) -> dict:
                "succeeded", meta["summary"],
                [f"exercises/{exercise_id}/review.md"])
     return meta
+
+
+# ---------------------------------------------------------------- 整理提交
+
+def format_submission(settings: Settings, exercise_id: str,
+                      submission_text: str) -> str:
+    """Turn rough notes into editable submission markdown without saving it."""
+    dirs = ws_dirs(settings.workspace)
+    try:
+        ex_dir = safe_child(dirs["exercises"], exercise_id)
+    except ValueError as exc:
+        raise RuntimeError(f"invalid exercise id: {exercise_id}") from exc
+    if not ex_dir.exists():
+        raise RuntimeError(f"exercise not found: {exercise_id}")
+    meta = renders.load_meta(ex_dir)
+    if meta.get("status") != "prompted":
+        raise RuntimeError("这道题已经提交或完成，不能再整理")
+    if not isinstance(submission_text, str) or not submission_text.strip():
+        raise RuntimeError("submission 为空")
+
+    template = renders.read(dirs["template"] / "submission.md", "")
+    prompt = renders.read(ex_dir / "prompt.md", meta.get("title", ""))
+    data = chat_json(
+        _client(settings), _model(settings),
+        renders.load_prompt("format_submission", prompt=prompt, template=template),
+        user=("以下是用户待整理的 context。请把它整理成 submission 字段里的 Markdown；"
+              "不要输出 JSON 之外的文字。\n\n--- 用户 context 开始 ---\n"
+              f"{submission_text}\n--- 用户 context 结束 ---"),
+        temperature=0.2)
+    formatted = data.get("submission") if isinstance(data, dict) else None
+    if not isinstance(formatted, str) or not formatted.strip():
+        raise RuntimeError("LLM 返回的整理结果无效")
+    return formatted.strip()
 
 
 def complete_micro_revision(settings: Settings, exercise_id: str,

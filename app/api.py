@@ -439,6 +439,34 @@ async def exercise_submit(exercise_id: str, request: Request):
                            scope=f"grade:{exercise_id}")}
 
 
+@app.post("/api/exercise/{exercise_id}/format-submission")
+async def exercise_format_submission(exercise_id: str, request: Request):
+    user = await _auth(request)
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        raise HTTPException(400, "submission 格式无效")
+    text = body["text"]
+    if not text.strip():
+        raise HTTPException(400, "请先输入想法，再使用 AI 整理")
+    if len(text) > 50000:
+        raise HTTPException(413, "submission 内容过长，请先删减后再整理")
+
+    client = request.client.host if request.client else "unknown"
+    if not auth.allow_rate(
+        f"format-submission:{user.id}:{client}", limit=10, window_seconds=300
+    ):
+        raise HTTPException(429, "AI 整理请求过多，请稍后再试")
+
+    user_settings = _user_settings(user)
+    try:
+        formatted = await asyncio.to_thread(
+            jobs.format_submission, user_settings, exercise_id, text
+        )
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"submission": formatted}
+
+
 @app.post("/api/exercise/{exercise_id}/micro-revise")
 async def micro_revise(exercise_id: str, request: Request):
     user = await _auth(request)

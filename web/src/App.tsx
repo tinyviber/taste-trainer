@@ -89,6 +89,7 @@ function PracticeView({ onUnauthorized }: { onUnauthorized?: () => void }) {
   const [submission, setSubmission] = useState('')
   const [micro, setMicro] = useState('')
   const [busy, setBusy] = useState(false)
+  const [formatting, setFormatting] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const initializedPromptRef = useRef<string | null>(null)
@@ -130,6 +131,28 @@ function PracticeView({ onUnauthorized }: { onUnauthorized?: () => void }) {
 
   const submit = () => latest && void run(`/api/exercise/${encodeURIComponent(latest.id)}/submit`, jsonBody({ text: submission }))
   const submitMicro = () => latest && void run(`/api/exercise/${encodeURIComponent(latest.id)}/micro-revise`, jsonBody({ text: micro }))
+  const formatSubmission = async () => {
+    if (!latest || !submission.trim() || formatting) return
+    setBusy(true)
+    setFormatting(true)
+    setError('')
+    try {
+      const result = await apiFetch<{ submission: string }>(
+        `/api/exercise/${encodeURIComponent(latest.id)}/format-submission`,
+        jsonBody({ text: submission }),
+      )
+      setSubmission(result.submission)
+    } catch (caught) {
+      if (isUnauthorized(caught)) {
+        onUnauthorized?.()
+        return
+      }
+      setError(caught instanceof Error ? caught.message : 'AI 整理失败')
+    } finally {
+      setFormatting(false)
+      setBusy(false)
+    }
+  }
   const analyze = (video: Video) => void run('/api/analyze', jsonBody({ video: video.name }))
   const upload = async () => {
     const file = fileRef.current?.files?.[0]
@@ -159,7 +182,7 @@ function PracticeView({ onUnauthorized }: { onUnauthorized?: () => void }) {
     <div className="two-column">
       <section className="panel submission-panel">
         <SectionTitle eyebrow="Write it out" title={latest?.status === 'needs_micro_revision' ? '先完成 micro-v2' : '你的分镜方案'} />
-        {latest?.status === 'prompted' ? <><textarea value={submission} onChange={event => setSubmission(event.target.value)} placeholder="00:00–00:05 画面……" /><Button variant="primary" disabled={busy || !submission.trim()} onClick={submit}>提交并打分 <span>→</span></Button></> : latest?.status === 'needs_micro_revision' ? <><div className="focus-note"><span className="eyebrow">Focus / {state?.micro_focus?.dim ?? latest.weakest ?? 'weakest dimension'}</span><p>{state?.micro_focus?.original ?? '请重写一个 5–10 秒片段。'}</p><small>{state?.micro_focus?.gap ?? ''}</small></div><textarea value={micro} onChange={event => setMicro(event.target.value)} placeholder="只重写上面指出的一个 5–10 秒片段" /><Button variant="primary" disabled={busy || !micro.trim()} onClick={submitMicro}>提交 micro-v2 <span>→</span></Button></> : <Empty>{latest ? '这道题已完成。点击“出新题”继续。' : '还没有可提交的练习。'}</Empty>}
+        {latest?.status === 'prompted' ? <><textarea value={submission} onChange={event => setSubmission(event.target.value)} placeholder="先把想法随手写下来，例如：开头先拍手，再切到门口……" /><div className="submission-tools"><span className="submission-hint">格式凌乱也没关系，AI 会整理成可编辑的分镜。</span><Button disabled={busy || formatting || !submission.trim()} onClick={() => void formatSubmission()}>{formatting ? '整理中…' : 'AI 整理格式'} <span>✦</span></Button></div><Button variant="primary" disabled={busy || formatting || !submission.trim()} onClick={submit}>提交并打分 <span>→</span></Button></> : latest?.status === 'needs_micro_revision' ? <><div className="focus-note"><span className="eyebrow">Focus / {state?.micro_focus?.dim ?? latest.weakest ?? 'weakest dimension'}</span><p>{state?.micro_focus?.original ?? '请重写一个 5–10 秒片段。'}</p><small>{state?.micro_focus?.gap ?? ''}</small></div><textarea value={micro} onChange={event => setMicro(event.target.value)} placeholder="只重写上面指出的一个 5–10 秒片段" /><Button variant="primary" disabled={busy || !micro.trim()} onClick={submitMicro}>提交 micro-v2 <span>→</span></Button></> : <Empty>{latest ? '这道题已完成。点击“出新题”继续。' : '还没有可提交的练习。'}</Empty>}
       </section>
 
       <section className="panel action-panel">
